@@ -1,33 +1,88 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { parseNotes, costLabel, euro, sumRange, enumerateCombinations, buildExportData, toMarkdown, DEFAULT_TRIP_NOTES } from '../utils/parseTripNotes';
+import {
+  groupRows, linesToRows, newRow, costLabel, euro, sumRange, enumerateCombinations,
+  buildExportData, toMarkdown, DEFAULT_TRIP_NOTES,
+} from '../utils/parseTripNotes';
 
 const COMBO_DISPLAY_LIMIT = 12;
 const COMBO_CAP = 4000;
 
-const CAT_DOT = { travel: 'bg-blue-500', stay: 'bg-purple-500', activity: 'bg-green-500' };
 const CAT_NODE = { travel: 'bg-blue-500', stay: 'bg-purple-500', activity: 'bg-green-500' };
+
+function rowGroupKey(row) {
+  return row.category === 'activity' ? null : ((row.group && row.group.trim()) ? row.group.trim() : `Untitled ${row.id}`);
+}
+
+function pickedOption(group, selMap) {
+  const id = selMap[group.key];
+  return group.options.find((o) => o.idx === id) || group.options[0];
+}
 
 export default function TripPlanner() {
   const [notesText, setNotesText] = useState(DEFAULT_TRIP_NOTES);
+  const [rows, setRows] = useState(() => linesToRows(DEFAULT_TRIP_NOTES).rows);
+  const [notes, setNotes] = useState(() => linesToRows(DEFAULT_TRIP_NOTES).notes);
   const [selection, setSelection] = useState({ travel: {}, stay: {}, activity: {} });
 
-  const parsed = useMemo(() => parseNotes(notesText), [notesText]);
+  const parsed = useMemo(() => groupRows(rows, notes), [rows, notes]);
 
+  // Keep existing picks where the selected row still exists; default new
+  // groups/activities. Runs after any row add/edit/delete.
   useEffect(() => {
     setSelection((prev) => {
       const travel = {};
-      parsed.travel.forEach((g) => { travel[g.key] = prev.travel[g.key] !== undefined ? prev.travel[g.key] : 0; });
+      parsed.travel.forEach((g) => {
+        const cur = prev.travel[g.key];
+        const stillValid = cur && g.options.some((o) => o.idx === cur);
+        travel[g.key] = stillValid ? cur : g.options[0].idx;
+      });
       const stay = {};
-      parsed.stay.forEach((g) => { stay[g.key] = prev.stay[g.key] !== undefined ? prev.stay[g.key] : 0; });
+      parsed.stay.forEach((g) => {
+        const cur = prev.stay[g.key];
+        const stillValid = cur && g.options.some((o) => o.idx === cur);
+        stay[g.key] = stillValid ? cur : g.options[0].idx;
+      });
       const activity = {};
-      parsed.activities.forEach((a) => { activity[a.idx] = prev.activity[a.idx] !== undefined ? prev.activity[a.idx] : true; });
+      parsed.activities.forEach((a) => {
+        activity[a.idx] = prev.activity[a.idx] !== undefined ? prev.activity[a.idx] : true;
+      });
       return { travel, stay, activity };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parsed]);
 
-  const travelPicks = parsed.travel.map((g) => g.options[selection.travel[g.key] || 0]);
-  const stayPicks = parsed.stay.map((g) => g.options[selection.stay[g.key] || 0]);
+  function convertNotesToTable() {
+    const result = linesToRows(notesText);
+    setRows(result.rows);
+    setNotes(result.notes);
+    setSelection({ travel: {}, stay: {}, activity: {} });
+  }
+  function addRow(category = 'travel') {
+    setRows((rs) => [...rs, newRow(category)]);
+  }
+  function deleteRow(id) {
+    setRows((rs) => rs.filter((r) => r.id !== id));
+  }
+  function updateRow(id, field, value) {
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+  }
+  function pickGroup(kind, groupKey, rowId) {
+    setSelection((s) => ({ ...s, [kind]: { ...s[kind], [groupKey]: rowId } }));
+  }
+  function toggleActivity(rowId) {
+    setSelection((s) => ({ ...s, activity: { ...s.activity, [rowId]: !s.activity[rowId] } }));
+  }
+  function applyCombo(picks) {
+    setSelection((s) => {
+      const travel = { ...s.travel };
+      const stay = { ...s.stay };
+      picks.forEach((p) => { if (p.kind === 'travel') travel[p.key] = p.option.idx; else stay[p.key] = p.option.idx; });
+      return { ...s, travel, stay };
+    });
+  }
+
+  const travelPicks = parsed.travel.map((g) => pickedOption(g, selection.travel));
+  const stayPicks = parsed.stay.map((g) => pickedOption(g, selection.stay));
   const activityPicks = parsed.activities.filter((a) => selection.activity[a.idx]);
 
   const travelRange = sumRange(travelPicks);
@@ -39,7 +94,7 @@ export default function TripPlanner() {
   };
 
   const stayNights = parsed.stay.reduce((sum, g) => {
-    const o = g.options[selection.stay[g.key] || 0];
+    const o = pickedOption(g, selection.stay);
     return sum + (o && o.cost && o.cost.nights ? o.cost.nights : 1);
   }, 0);
 
@@ -49,24 +104,6 @@ export default function TripPlanner() {
     if (headerStops.length === 0) headerStops.push(parts[0]);
     headerStops.push(parts[1] || g.key);
   });
-
-  function pickTravel(key, i) {
-    setSelection((s) => ({ ...s, travel: { ...s.travel, [key]: i } }));
-  }
-  function pickStay(key, i) {
-    setSelection((s) => ({ ...s, stay: { ...s.stay, [key]: i } }));
-  }
-  function toggleActivity(idx) {
-    setSelection((s) => ({ ...s, activity: { ...s.activity, [idx]: !s.activity[idx] } }));
-  }
-  function applyCombo(picks) {
-    setSelection((s) => {
-      const travel = { ...s.travel };
-      const stay = { ...s.stay };
-      picks.forEach((p) => { if (p.kind === 'travel') travel[p.key] = p.i; else stay[p.key] = p.i; });
-      return { ...s, travel, stay };
-    });
-  }
 
   const comboGroups = useMemo(() => {
     const groups = [];
@@ -89,9 +126,9 @@ export default function TripPlanner() {
     return withOffset;
   }, [comboResult, activityRange.low, activityRange.high]);
 
-  const comboKey = (picks) => picks.map((p) => `${p.key}:${p.i}`).join('|');
+  const comboKey = (picks) => picks.map((p) => `${p.key}:${p.option.idx}`).join('|');
   const currentPicksKey = comboGroups
-    .map((g) => `${g.key}:${g.kind === 'travel' ? (selection.travel[g.key] || 0) : (selection.stay[g.key] || 0)}`)
+    .map((g) => `${g.key}:${g.kind === 'travel' ? selection.travel[g.key] : selection.stay[g.key]}`)
     .join('|');
   const currentRank = rankedCombos ? rankedCombos.findIndex((c) => comboKey(c.picks) === currentPicksKey) : -1;
   const displayCombos = rankedCombos
@@ -162,93 +199,149 @@ export default function TripPlanner() {
           <div className="mt-3 flex gap-2">
             <button
               type="button"
-              onClick={() => setNotesText(DEFAULT_TRIP_NOTES)}
+              onClick={convertNotesToTable}
+              className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+            >
+              Convert notes to table
+            </button>
+            <button
+              type="button"
+              onClick={() => { setNotesText(DEFAULT_TRIP_NOTES); const r = linesToRows(DEFAULT_TRIP_NOTES); setRows(r.rows); setNotes(r.notes); setSelection({ travel: {}, stay: {}, activity: {} }); }}
               className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 hover:border-blue-500"
             >
               Load example trip
             </button>
           </div>
-          <p className={`mt-2 text-xs ${total === 0 ? 'text-red-600' : 'text-slate-500'}`}>
+          <p className="text-xs text-slate-500 mt-2">Converting replaces the table below — edit rows directly afterward to fix any transcription mistakes.</p>
+          <p className={`mt-1 text-xs ${total === 0 ? 'text-red-600' : 'text-slate-500'}`}>
             {total === 0
-              ? 'No recognizable lines yet — try FLIGHT:, TRAIN:, HOTEL:, ACTIVITY: or NOTE:.'
-              : `Parsed ${parsed.travel.length} travel leg(s), ${parsed.stay.length} stay(s), ${parsed.activities.length} activit${parsed.activities.length === 1 ? 'y' : 'ies'}.`}
+              ? 'Table is empty — convert some notes or add a row.'
+              : `Tracking ${parsed.travel.length} travel leg(s), ${parsed.stay.length} stay(s), ${parsed.activities.length} activit${parsed.activities.length === 1 ? 'y' : 'ies'}.`}
           </p>
         </div>
 
-        {/* Control Panel */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-          {parsed.travel.map((g) => (
-            <div key={g.key} className="bg-white rounded-lg p-4 shadow-sm border border-slate-200">
-              <label className="flex items-center gap-2 text-xs font-semibold text-slate-900 mb-3 uppercase tracking-wide">
-                <span className={`inline-block w-2 h-2 rounded-full ${CAT_DOT.travel}`} />
-                {g.key}
-              </label>
-              <div className="space-y-2">
-                {g.options.map((o, i) => (
-                  <button
-                    key={i}
-                    onClick={() => pickTravel(g.key, i)}
-                    className={`w-full text-left px-3 py-2 rounded-lg border-2 transition-all text-xs ${
-                      (selection.travel[g.key] || 0) === i ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-white'
-                    }`}
-                  >
-                    <p className="font-semibold text-slate-900">{o.label}</p>
-                    <p className="text-xs text-slate-600">
-                      {[o.time.from && o.time.to ? `${o.time.from}–${o.time.to}` : o.time.from, costLabel(o)].filter(Boolean).join(' · ')}
-                    </p>
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-
-          {parsed.stay.map((g) => (
-            <div key={g.key} className="bg-white rounded-lg p-4 shadow-sm border border-slate-200">
-              <label className="flex items-center gap-2 text-xs font-semibold text-slate-900 mb-3 uppercase tracking-wide">
-                <span className={`inline-block w-2 h-2 rounded-full ${CAT_DOT.stay}`} />
-                {g.key} stay
-              </label>
-              <div className="space-y-2">
-                {g.options.map((o, i) => (
-                  <button
-                    key={i}
-                    onClick={() => pickStay(g.key, i)}
-                    className={`w-full text-left px-3 py-2 rounded-lg border-2 transition-all text-xs ${
-                      (selection.stay[g.key] || 0) === i ? 'border-purple-500 bg-purple-50' : 'border-slate-200 bg-white'
-                    }`}
-                  >
-                    <p className="font-semibold text-slate-900">{o.label}</p>
-                    <p className="text-xs text-slate-600">
-                      {costLabel(o)}{o.cost && o.cost.nights > 1 ? ` · ${o.cost.nights} nights` : ''}
-                    </p>
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-
-          {parsed.activities.length > 0 && (
-            <div className="bg-white rounded-lg p-4 shadow-sm border border-slate-200">
-              <label className="flex items-center gap-2 text-xs font-semibold text-slate-900 mb-3 uppercase tracking-wide">
-                <span className={`inline-block w-2 h-2 rounded-full ${CAT_DOT.activity}`} />
-                Activities
-              </label>
-              <div className="space-y-2">
-                {parsed.activities.map((a) => (
-                  <button
-                    key={a.idx}
-                    onClick={() => toggleActivity(a.idx)}
-                    className={`w-full text-left px-3 py-2 rounded-lg border-2 transition-all text-xs ${
-                      selection.activity[a.idx] ? 'border-green-500 bg-green-50' : 'border-slate-200 bg-white'
-                    }`}
-                  >
-                    <p className="font-semibold text-slate-900">{selection.activity[a.idx] ? '☑' : '☐'} {a.label}</p>
-                    <p className="text-xs text-slate-600">{costLabel(a)}</p>
-                  </button>
-                ))}
-              </div>
-            </div>
+        {/* Editable rows table */}
+        <div className="bg-white rounded-lg shadow-sm border border-slate-200 mb-8 overflow-x-auto">
+          {rows.length === 0 ? (
+            <p className="p-4 text-sm text-slate-500">
+              No rows yet. Convert your notes above, or{' '}
+              <button type="button" onClick={() => addRow('travel')} className="text-blue-600 underline">add a row</button>{' '}
+              to start typing directly.
+            </p>
+          ) : (
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-slate-500 uppercase text-[0.65rem] tracking-wide">
+                  <th className="text-left font-medium px-2 py-2">Pick</th>
+                  <th className="text-left font-medium px-2 py-2">Category</th>
+                  <th className="text-left font-medium px-2 py-2">Group / Leg</th>
+                  <th className="text-left font-medium px-2 py-2">Option</th>
+                  <th className="text-left font-medium px-2 py-2">Time</th>
+                  <th className="text-left font-medium px-2 py-2">Cost</th>
+                  <th className="text-left font-medium px-2 py-2">Detail</th>
+                  <th className="px-2 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => {
+                  const gk = rowGroupKey(row);
+                  const inputCls = 'w-full min-w-[7rem] font-mono text-xs px-1.5 py-1 rounded border border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none bg-transparent';
+                  return (
+                    <tr key={row.id} className="border-t border-slate-100">
+                      <td className="px-2 py-1.5">
+                        {row.category === 'activity' ? (
+                          <input
+                            type="checkbox"
+                            checked={!!selection.activity[row.id]}
+                            onChange={(e) => toggleActivity(row.id)}
+                            aria-label="Include this activity"
+                          />
+                        ) : (
+                          <input
+                            type="radio"
+                            name={`pick-${row.category}-${gk}`}
+                            checked={selection[row.category][gk] === row.id}
+                            onChange={() => pickGroup(row.category, gk, row.id)}
+                            aria-label="Use this option"
+                          />
+                        )}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <select
+                          value={row.category}
+                          onChange={(e) => updateRow(row.id, 'category', e.target.value)}
+                          className="text-xs font-mono border border-slate-200 rounded px-1 py-1"
+                        >
+                          <option value="travel">Travel</option>
+                          <option value="stay">Stay</option>
+                          <option value="activity">Activity</option>
+                        </select>
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input
+                          type="text"
+                          className={inputCls}
+                          value={row.group}
+                          onChange={(e) => updateRow(row.id, 'group', e.target.value)}
+                          placeholder={row.category === 'activity' ? 'n/a' : 'IST → MUN'}
+                          disabled={row.category === 'activity'}
+                        />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input
+                          type="text"
+                          className={`${inputCls} min-w-[11rem]`}
+                          value={row.option}
+                          onChange={(e) => updateRow(row.id, 'option', e.target.value)}
+                          placeholder="6:45 departure"
+                        />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input
+                          type="text"
+                          className={inputCls}
+                          value={row.timeText}
+                          onChange={(e) => updateRow(row.id, 'timeText', e.target.value)}
+                          placeholder="6:45-11:30"
+                        />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input
+                          type="text"
+                          className={inputCls}
+                          value={row.costText}
+                          onChange={(e) => updateRow(row.id, 'costText', e.target.value)}
+                          placeholder="€2100 or free"
+                        />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input
+                          type="text"
+                          className={`${inputCls} min-w-[10rem]`}
+                          value={row.detail}
+                          onChange={(e) => updateRow(row.id, 'detail', e.target.value)}
+                          placeholder="notes"
+                        />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <button type="button" onClick={() => deleteRow(row.id)} className="text-slate-400 hover:text-red-600 px-1" aria-label="Delete row">✕</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           )}
+          <div className="flex items-center justify-between gap-3 flex-wrap px-3 py-2.5 border-t border-slate-100">
+            <span className="text-xs text-slate-500">Edit any cell directly — pick one option per group, check the activities you want. Everything below updates as you go.</span>
+            <button
+              type="button"
+              onClick={() => addRow('travel')}
+              className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 hover:border-blue-500 flex-shrink-0"
+            >
+              + Add row
+            </button>
+          </div>
         </div>
 
         {/* Itinerary Timeline */}
@@ -266,7 +359,7 @@ export default function TripPlanner() {
                   const isLast = i === parsed.timelineOrder.length - 1;
                   if (item.type === 'travel') {
                     const g = parsed.travelGroupsByKey[item.key];
-                    const o = g.options[selection.travel[item.key] || 0];
+                    const o = pickedOption(g, selection.travel);
                     n += 1;
                     rendered.push(
                       <div key={`t-${item.key}`} className="flex gap-3 md:gap-4">
@@ -288,7 +381,7 @@ export default function TripPlanner() {
                     );
                   } else if (item.type === 'stay') {
                     const g = parsed.stayGroupsByKey[item.key];
-                    const o = g.options[selection.stay[item.key] || 0];
+                    const o = pickedOption(g, selection.stay);
                     n += 1;
                     rendered.push(
                       <div key={`s-${item.key}`} className="flex gap-3 md:gap-4">

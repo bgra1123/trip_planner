@@ -12,9 +12,9 @@ function categoryFor(tag) {
 }
 
 export function parseCost(text) {
-  const m = text.match(/(?:€|\$|£|eur|usd|gbp)\s?([\d,.]+)(?:\s?[-–to]{1,4}\s?(?:€|\$|£|eur|usd|gbp)?\s?([\d,.]+))?(\s*\/\s*night)?/i);
-  const freeMatch = /\b(free|included|no cost)\b/i.test(text);
-  if (freeMatch && !m) return { low: 0, high: 0, perNight: false, nights: 1, isFree: true };
+  const m = text.match(/(?:€|\$|£|eur|usd|gbp)\s?(\d+(?:[.,]\d+)*)(?:\s?[-–to]{1,4}\s?(?:€|\$|£|eur|usd|gbp)?\s?(\d+(?:[.,]\d+)*))?(\s*\/\s*night)?/i);
+  const freeMatch = text.match(/\b(free|included|no cost)\b/i);
+  if (freeMatch && !m) return { low: 0, high: 0, perNight: false, nights: 1, isFree: true, raw: freeMatch[0] };
   if (!m) return null;
   let low = parseFloat(m[1].replace(/,/g, ''));
   let high = m[2] ? parseFloat(m[2].replace(/,/g, '')) : low;
@@ -22,7 +22,16 @@ export function parseCost(text) {
   const nightsMatch = text.match(/x\s?(\d+)|for\s+(\d+)\s+nights?|(\d+)\s+nights?/i);
   const nights = nightsMatch ? parseInt(nightsMatch[1] || nightsMatch[2] || nightsMatch[3], 10) : 1;
   if (perNight) { low *= nights; high *= nights; }
-  return { low, high, perNight, nights, isFree: low === 0 && high === 0 };
+  return { low, high, perNight, nights, isFree: low === 0 && high === 0, raw: m[0] };
+}
+
+// Re-serialize a parsed cost back into editable shorthand text
+// (round-trips "€90/night x3" losslessly, unlike rebuilding from low/high).
+export function costText(cost) {
+  if (!cost) return '';
+  let t = cost.raw || (cost.isFree ? 'free' : `€${cost.low}`);
+  if (cost.perNight && cost.nights > 1 && !/x\s?\d+/i.test(t)) t += ` x${cost.nights}`;
+  return t;
 }
 
 export function parseTimes(text) {
@@ -109,14 +118,10 @@ function parseLine(raw, idx) {
   return { idx, category, tag, groupKey, label, raw: line, time, cost, detail };
 }
 
-export function parseNotes(text) {
-  const lines = text.split('\n');
-  const entries = [];
-  for (let i = 0; i < lines.length; i++) {
-    const e = parseLine(lines[i], i);
-    if (e) entries.push(e);
-  }
-
+// Shared by parseNotes (entries from raw text lines) and groupRows (entries
+// from editable table rows) — everything downstream (rendering, cost
+// breakdown, combinations, export) only ever consumes this shape.
+function groupEntries(entries) {
   const travelOrder = [], travelGroups = {};
   const stayOrder = [], stayGroups = {};
   const activities = [];
@@ -149,6 +154,66 @@ export function parseNotes(text) {
     travelGroupsByKey: travelGroups,
     stayGroupsByKey: stayGroups,
   };
+}
+
+export function parseNotes(text) {
+  const lines = text.split('\n');
+  const entries = [];
+  for (let i = 0; i < lines.length; i++) {
+    const e = parseLine(lines[i], i);
+    if (e) entries.push(e);
+  }
+  return groupEntries(entries);
+}
+
+let nextRowId = 1;
+export function newRowId() { return `r${nextRowId++}`; }
+export function newRow(category = 'travel') {
+  return { id: newRowId(), category, group: '', option: '', timeText: '', costText: '', detail: '' };
+}
+
+// One-time conversion of pasted/typed shorthand text into editable table
+// rows (+ a plain notes list). This only runs when the user explicitly asks
+// to (re)build the table from text — it never runs automatically, since that
+// would clobber in-progress table edits.
+export function linesToRows(text) {
+  const lines = text.split('\n');
+  const rows = [];
+  const notes = [];
+  for (let i = 0; i < lines.length; i++) {
+    const e = parseLine(lines[i], i);
+    if (!e) continue;
+    if (e.category === 'note') { notes.push(e.label || e.raw); continue; }
+    rows.push({
+      id: newRowId(),
+      category: e.category,
+      group: e.groupKey || '',
+      option: e.label || '',
+      timeText: e.time.from && e.time.to ? `${e.time.from}-${e.time.to}` : (e.time.from || ''),
+      costText: costText(e.cost),
+      detail: e.detail || '',
+    });
+  }
+  return { rows, notes };
+}
+
+// Reshape editable table rows into the same grouped structure parseNotes()
+// produces, so every downstream consumer (rendering, cost breakdown,
+// combinations, export) works unchanged regardless of the data's source.
+export function groupRows(rows, notes = []) {
+  const entries = rows
+    .filter((r) => r.category === 'travel' || r.category === 'stay' || r.category === 'activity')
+    .map((r) => ({
+      idx: r.id,
+      category: r.category,
+      groupKey: r.category === 'activity' ? null : (r.group && r.group.trim() ? r.group.trim() : `Untitled ${r.id}`),
+      label: r.option && r.option.trim() ? r.option.trim() : `Option ${r.id}`,
+      time: parseTimes(r.timeText || ''),
+      cost: parseCost(r.costText || ''),
+      detail: r.detail || '',
+      raw: '',
+    }));
+  return { ...groupEntries(entries), notes };
 }
 
 // First option per travel/stay group, all activities included — the same

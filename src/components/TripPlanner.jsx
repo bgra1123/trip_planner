@@ -1,8 +1,12 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
-  groupRows, linesToRows, newRow, costLabel, euro, sumRange, enumerateCombinations,
+  groupRows, linesToRows, newRow, newRowId, costLabel, euro, sumRange, enumerateCombinations,
   buildExportData, toMarkdown, deriveRouteChain, DEFAULT_TRIP_NOTES,
 } from '../utils/parseTripNotes';
+
+function ratesToRows(rates) {
+  return Object.entries(rates || {}).map(([code, factor]) => ({ id: newRowId(), code, factor: String(factor) }));
+}
 
 const COMBO_DISPLAY_LIMIT = 3;
 const COMBO_CAP = 4000;
@@ -22,9 +26,20 @@ export default function TripPlanner() {
   const [notesText, setNotesText] = useState(DEFAULT_TRIP_NOTES);
   const [rows, setRows] = useState(() => linesToRows(DEFAULT_TRIP_NOTES).rows);
   const [notes, setNotes] = useState(() => linesToRows(DEFAULT_TRIP_NOTES).notes);
+  const [rateRows, setRateRows] = useState(() => ratesToRows(linesToRows(DEFAULT_TRIP_NOTES).rates));
   const [selection, setSelection] = useState({ travel: {}, stay: {}, activity: {} });
 
-  const parsed = useMemo(() => groupRows(rows, notes), [rows, notes]);
+  const rates = useMemo(() => {
+    const m = {};
+    rateRows.forEach((r) => {
+      const code = (r.code || '').trim().toUpperCase();
+      const val = parseFloat(r.factor);
+      if (code && !Number.isNaN(val)) m[code] = val;
+    });
+    return m;
+  }, [rateRows]);
+
+  const parsed = useMemo(() => groupRows(rows, notes, rates), [rows, notes, rates]);
 
   // Keep existing picks where the selected row still exists; default new
   // groups/activities. Runs after any row add/edit/delete.
@@ -55,6 +70,7 @@ export default function TripPlanner() {
     const result = linesToRows(notesText);
     setRows(result.rows);
     setNotes(result.notes);
+    setRateRows(ratesToRows(result.rates));
     setSelection({ travel: {}, stay: {}, activity: {} });
   }
   function addRow(category = 'travel') {
@@ -65,6 +81,15 @@ export default function TripPlanner() {
   }
   function updateRow(id, field, value) {
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+  }
+  function addRateRow() {
+    setRateRows((rs) => [...rs, { id: newRowId(), code: '', factor: '' }]);
+  }
+  function deleteRateRow(id) {
+    setRateRows((rs) => rs.filter((r) => r.id !== id));
+  }
+  function updateRateRow(id, field, value) {
+    setRateRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
   }
   function pickGroup(kind, groupKey, rowId) {
     setSelection((s) => ({ ...s, [kind]: { ...s[kind], [groupKey]: rowId } }));
@@ -85,13 +110,16 @@ export default function TripPlanner() {
   const stayPicks = parsed.stay.map((g) => pickedOption(g, selection.stay));
   const activityPicks = parsed.activities.filter((a) => selection.activity[a.idx]);
 
-  const travelRange = sumRange(travelPicks);
-  const stayRange = sumRange(stayPicks);
-  const activityRange = sumRange(activityPicks);
+  const travelRange = sumRange(travelPicks, rates);
+  const stayRange = sumRange(stayPicks, rates);
+  const activityRange = sumRange(activityPicks, rates);
   const totalRange = {
     low: travelRange.low + stayRange.low + activityRange.low,
     high: travelRange.high + stayRange.high + activityRange.high,
   };
+  const missingRates = Array.from(new Set([
+    ...travelRange.missingCurrencies, ...stayRange.missingCurrencies, ...activityRange.missingCurrencies,
+  ]));
 
   const stayNights = parsed.stay.reduce((sum, g) => {
     const o = pickedOption(g, selection.stay);
@@ -107,7 +135,7 @@ export default function TripPlanner() {
     return groups;
   }, [parsed]);
 
-  const comboResult = useMemo(() => enumerateCombinations(comboGroups, COMBO_CAP), [comboGroups]);
+  const comboResult = useMemo(() => enumerateCombinations(comboGroups, rates, COMBO_CAP), [comboGroups, rates]);
 
   const rankedCombos = useMemo(() => {
     if (comboResult.truncated) return null;
@@ -187,7 +215,10 @@ export default function TripPlanner() {
             Repeat a tag with the same route/place for alternative options. Put a{' '}
             <code className="bg-slate-100 rounded px-1">WINDOW: 14-19 Aug</code> line before a block of options to tag them
             with a date range — combinations will never mix options from different windows;{' '}
-            <code className="bg-slate-100 rounded px-1">WINDOW:</code> alone clears it.
+            <code className="bg-slate-100 rounded px-1">WINDOW:</code> alone clears it. Costs can use other currencies
+            (<code className="bg-slate-100 rounded px-1">TRY21000</code>, <code className="bg-slate-100 rounded px-1">$40</code>) —
+            add a <code className="bg-slate-100 rounded px-1">RATE: TRY 0.018</code> line (EUR per unit) to convert them, or edit the
+            Exchange Rates panel below directly. Costs in a currency with no rate are excluded from totals, with a warning.
           </p>
           <textarea
             value={notesText}
@@ -205,7 +236,7 @@ export default function TripPlanner() {
             </button>
             <button
               type="button"
-              onClick={() => { setNotesText(DEFAULT_TRIP_NOTES); const r = linesToRows(DEFAULT_TRIP_NOTES); setRows(r.rows); setNotes(r.notes); setSelection({ travel: {}, stay: {}, activity: {} }); }}
+              onClick={() => { setNotesText(DEFAULT_TRIP_NOTES); const r = linesToRows(DEFAULT_TRIP_NOTES); setRows(r.rows); setNotes(r.notes); setRateRows(ratesToRows(r.rates)); setSelection({ travel: {}, stay: {}, activity: {} }); }}
               className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 hover:border-blue-500"
             >
               Load example trip
@@ -217,6 +248,69 @@ export default function TripPlanner() {
               ? 'Table is empty — convert some notes or add a row.'
               : `Tracking ${parsed.travel.length} travel leg(s), ${parsed.stay.length} stay(s), ${parsed.activities.length} activit${parsed.activities.length === 1 ? 'y' : 'ies'}.`}
           </p>
+        </div>
+
+        {/* Exchange Rates */}
+        <div className="bg-white rounded-lg p-4 shadow-sm border border-slate-200 mb-8">
+          <label className="block text-xs font-semibold text-slate-900 mb-2 uppercase tracking-wide">Exchange Rates</label>
+          <p className="text-xs text-slate-500 mb-3">
+            Base currency is EUR. Enter EUR-per-unit for any other currency used in a cost (e.g. TRY = 0.018). Costs in a
+            currency with no rate here are excluded from totals and combinations, never guessed as 1:1.
+          </p>
+          {rateRows.length === 0 ? (
+            <p className="text-xs text-slate-500 mb-2">No conversion rates set — only EUR costs are included in totals.</p>
+          ) : (
+            <table className="text-xs mb-2">
+              <thead>
+                <tr className="text-slate-500 uppercase text-[0.65rem] tracking-wide">
+                  <th className="text-left font-medium px-2 py-1">Currency</th>
+                  <th className="text-left font-medium px-2 py-1">EUR per unit</th>
+                  <th className="px-2 py-1"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rateRows.map((r) => (
+                  <tr key={r.id} className="border-t border-slate-100">
+                    <td className="px-2 py-1">
+                      <input
+                        type="text"
+                        value={r.code}
+                        onChange={(e) => updateRateRow(r.id, 'code', e.target.value.toUpperCase())}
+                        placeholder="TRY"
+                        maxLength={3}
+                        className="w-16 font-mono text-xs px-1.5 py-1 rounded border border-slate-200 focus:border-blue-400 focus:outline-none uppercase"
+                      />
+                    </td>
+                    <td className="px-2 py-1">
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={r.factor}
+                        onChange={(e) => updateRateRow(r.id, 'factor', e.target.value)}
+                        placeholder="0.018"
+                        className="w-24 font-mono text-xs px-1.5 py-1 rounded border border-slate-200 focus:border-blue-400 focus:outline-none"
+                      />
+                    </td>
+                    <td className="px-2 py-1">
+                      <button type="button" onClick={() => deleteRateRow(r.id)} className="text-slate-400 hover:text-red-600 px-1" aria-label="Delete rate">✕</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <button
+            type="button"
+            onClick={addRateRow}
+            className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 hover:border-blue-500"
+          >
+            + Add rate
+          </button>
+          {missingRates.length > 0 && (
+            <p className="text-xs text-amber-700 mt-3 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+              ⚠️ Currently-picked costs in {missingRates.join(', ')} have no rate and are excluded from the totals below.
+            </p>
+          )}
         </div>
 
         {/* Editable rows table */}
@@ -493,6 +587,11 @@ export default function TripPlanner() {
                 <p className="text-xs text-slate-500 mb-3">
                   {rankedCombos.length.toLocaleString('en-US')} valid combination{rankedCombos.length === 1 ? '' : 's'} across your travel and stay picks, cheapest first. Click a row to apply it.
                 </p>
+                {comboResult.missingCurrencies && comboResult.missingCurrencies.length > 0 && (
+                  <p className="text-xs text-amber-700 mb-3 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                    ⚠️ Options priced in {comboResult.missingCurrencies.join(', ')} have no rate and are left out of these combinations.
+                  </p>
+                )}
                 <table className="w-full text-xs whitespace-nowrap">
                   <thead>
                     <tr className="text-slate-500 uppercase text-[0.65rem] tracking-wide">

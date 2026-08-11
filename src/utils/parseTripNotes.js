@@ -11,10 +11,19 @@ function categoryFor(tag) {
   return null;
 }
 
+// Recognized currency markers -> ISO code. Symbols display compactly
+// (€, $, £, ₺); word/code markers (eur, usd, try, chf) resolve to the
+// same codes so "EUR2100" and "€2100" behave identically.
+export const CURRENCY_SYMBOLS = { EUR: '€', USD: '$', GBP: '£', TRY: '₺', CHF: 'CHF' };
+const CURRENCY_CODE = { '€': 'EUR', '$': 'USD', '£': 'GBP', '₺': 'TRY', eur: 'EUR', usd: 'USD', gbp: 'GBP', try: 'TRY', chf: 'CHF' };
+const CUR_PATTERN = '€|\\$|£|₺|eur|usd|gbp|try|chf';
+
 export function parseCost(text) {
-  const m = text.match(/(?:€|\$|£|eur|usd|gbp)\s?(\d+(?:[.,]\d+)*)(?:\s?[-–to]{1,4}\s?(?:€|\$|£|eur|usd|gbp)?\s?(\d+(?:[.,]\d+)*))?(\s*\/\s*night)?/i);
+  const re = new RegExp(`(?:${CUR_PATTERN})\\s?(\\d+(?:[.,]\\d+)*)(?:\\s?[-–to]{1,4}\\s?(?:${CUR_PATTERN})?\\s?(\\d+(?:[.,]\\d+)*))?(\\s*\\/\\s*night)?`, 'i');
+  const curRe = new RegExp(`${CUR_PATTERN}`, 'i');
+  const m = text.match(re);
   const freeMatch = text.match(/\b(free|included|no cost)\b/i);
-  if (freeMatch && !m) return { low: 0, high: 0, perNight: false, nights: 1, isFree: true, raw: freeMatch[0] };
+  if (freeMatch && !m) return { low: 0, high: 0, perNight: false, nights: 1, isFree: true, raw: freeMatch[0], currency: null };
   if (!m) return null;
   let low = parseFloat(m[1].replace(/,/g, ''));
   let high = m[2] ? parseFloat(m[2].replace(/,/g, '')) : low;
@@ -22,7 +31,34 @@ export function parseCost(text) {
   const nightsMatch = text.match(/x\s?(\d+)|for\s+(\d+)\s+nights?|(\d+)\s+nights?/i);
   const nights = nightsMatch ? parseInt(nightsMatch[1] || nightsMatch[2] || nightsMatch[3], 10) : 1;
   if (perNight) { low *= nights; high *= nights; }
-  return { low, high, perNight, nights, isFree: low === 0 && high === 0, raw: m[0] };
+  const curMatch = m[0].match(curRe);
+  const currency = curMatch ? CURRENCY_CODE[curMatch[0].toLowerCase()] : 'EUR';
+  return { low, high, perNight, nights, isFree: low === 0 && high === 0, raw: m[0], currency };
+}
+
+export function formatMoney(n, currency) {
+  currency = currency || 'EUR';
+  const sym = CURRENCY_SYMBOLS[currency];
+  const sign = n < 0 ? '-' : '';
+  n = Math.abs(Math.round(n));
+  const formatted = n.toLocaleString('en-US');
+  if (sym && sym.length === 1) return `${sign}${sym}${formatted}`;
+  return `${sign}${formatted} ${sym || currency}`;
+}
+
+// Convert a parsed cost into the base currency (EUR) using a { CODE: eurPerUnit }
+// rate table. Same-currency and free costs need no rate. Returns
+// missingRate: true (never a silent 1:1 guess) when the currency isn't EUR
+// and no rate is on file — callers must exclude these from sums/rankings.
+export function convertToBase(cost, rates, base) {
+  base = base || 'EUR';
+  if (!cost) return { low: 0, high: 0, missingRate: false };
+  if (cost.isFree || !cost.currency || cost.currency === base) {
+    return { low: cost.low, high: cost.high, missingRate: false };
+  }
+  const rate = (rates || {})[cost.currency];
+  if (rate === undefined) return { low: 0, high: 0, missingRate: true };
+  return { low: cost.low * rate, high: cost.high * rate, missingRate: false };
 }
 
 // Re-serialize a parsed cost back into editable shorthand text
@@ -61,7 +97,7 @@ function cleanup(text) {
 
 function stripKnownTokens(text, opts = {}) {
   let out = text
-    .replace(/(?:€|\$|£|eur|usd|gbp)\s?[\d,.]+(?:\s?[-–to]{1,4}\s?(?:€|\$|£|eur|usd|gbp)?\s?[\d,.]+)?(\s*\/\s*night)?/ig, '')
+    .replace(new RegExp(`(?:${CUR_PATTERN})\\s?[\\d,.]+(?:\\s?[-–to]{1,4}\\s?(?:${CUR_PATTERN})?\\s?[\\d,.]+)?(\\s*\\/\\s*night)?`, 'ig'), '')
     .replace(/\b(free|included|no cost)\b/ig, '')
     .replace(/\b\d{1,2}:\d{2}\s?(?:[-–]|to)\s?\d{1,2}:\d{2}\b(?:\s?to\s?\d{1,2}:\d{2}\s?(?:[-–]|to)\s?\d{1,2}:\d{2}\b)?/ig, '')
     .replace(/\b\d{1,2}:\d{2}\b/g, '')
@@ -120,13 +156,18 @@ function parseLine(raw, idx, window) {
 
 // A `WINDOW: <label>` line sets the date-window context for every entry
 // until the next WINDOW: line; `WINDOW:` with no label (or none/any/all)
-// clears it back to universal. WINDOW: lines never become entries
-// themselves. Lets a user paste two (or more) rounds of price research —
-// e.g. "14-19 Aug" and "13-18 Aug" — into one notes block without the
-// combination logic ever pairing options from different windows.
-function splitWindowedLines(text) {
+// clears it back to universal. A `RATE: TRY 0.0181` line sets the
+// EUR-per-unit conversion factor for that currency (used by every cost in
+// that currency, anywhere in the notes — rates aren't block-scoped like
+// windows are). Neither directive becomes an entry itself. Lets a user
+// paste two (or more) rounds of price research — e.g. "14-19 Aug" and
+// "13-18 Aug", possibly priced in different currencies — into one notes
+// block without the combination logic ever pairing options from different
+// windows, or silently treating one currency as if it were another.
+function preprocessLines(text) {
   const lines = text.split('\n');
   let currentWindow = '';
+  const rates = {};
   const out = [];
   lines.forEach((raw, idx) => {
     const line = raw.trim();
@@ -136,9 +177,14 @@ function splitWindowedLines(text) {
       currentWindow = (!label || /^(none|any|all)$/i.test(label)) ? '' : label;
       return;
     }
+    const rateMatch = line.match(/^RATE\s*:\s*([A-Za-z]{3})\s+([\d.]+)/i);
+    if (rateMatch) {
+      rates[rateMatch[1].toUpperCase()] = parseFloat(rateMatch[2]);
+      return;
+    }
     out.push({ raw, idx, window: currentWindow });
   });
-  return out;
+  return { items: out, rates };
 }
 
 // Shared by parseNotes (entries from raw text lines) and groupRows (entries
@@ -208,11 +254,12 @@ export function deriveRouteChain(travelGroups) {
 
 export function parseNotes(text) {
   const entries = [];
-  splitWindowedLines(text).forEach(({ raw, idx, window }) => {
+  const { items, rates } = preprocessLines(text);
+  items.forEach(({ raw, idx, window }) => {
     const e = parseLine(raw, idx, window);
     if (e) entries.push(e);
   });
-  return groupEntries(entries);
+  return { ...groupEntries(entries), rates };
 }
 
 let nextRowId = 1;
@@ -228,7 +275,8 @@ export function newRow(category = 'travel') {
 export function linesToRows(text) {
   const rows = [];
   const notes = [];
-  splitWindowedLines(text).forEach(({ raw, idx, window }) => {
+  const { items, rates } = preprocessLines(text);
+  items.forEach(({ raw, idx, window }) => {
     const e = parseLine(raw, idx, window);
     if (!e) return;
     if (e.category === 'note') { notes.push(e.label || e.raw); return; }
@@ -243,13 +291,13 @@ export function linesToRows(text) {
       window: e.window || '',
     });
   });
-  return { rows, notes };
+  return { rows, notes, rates };
 }
 
 // Reshape editable table rows into the same grouped structure parseNotes()
 // produces, so every downstream consumer (rendering, cost breakdown,
 // combinations, export) works unchanged regardless of the data's source.
-export function groupRows(rows, notes = []) {
+export function groupRows(rows, notes = [], rates = {}) {
   const entries = rows
     .filter((r) => r.category === 'travel' || r.category === 'stay' || r.category === 'activity')
     .map((r) => ({
@@ -263,7 +311,7 @@ export function groupRows(rows, notes = []) {
       window: r.window || '',
       raw: '',
     }));
-  return { ...groupEntries(entries), notes };
+  return { ...groupEntries(entries), notes, rates };
 }
 
 // Resolve a group's currently-selected option by id, falling back to the
@@ -296,14 +344,26 @@ export function euro(n) {
 export function costLabel(opt) {
   if (!opt || !opt.cost) return 'cost n/a';
   if (opt.cost.isFree) return 'free';
-  if (opt.cost.low === opt.cost.high) return euro(opt.cost.low);
-  return `${euro(opt.cost.low)}–${euro(opt.cost.high)}`;
+  const cur = opt.cost.currency || 'EUR';
+  if (opt.cost.low === opt.cost.high) return formatMoney(opt.cost.low, cur);
+  return `${formatMoney(opt.cost.low, cur)}–${formatMoney(opt.cost.high, cur)}`;
 }
 
-export function sumRange(items) {
+// Sums a list of picked options in the base currency (EUR), converting each
+// via `rates`. Any option whose currency has no rate on file is excluded
+// from the sum (never silently treated as 1:1) and its currency is reported
+// back in `missingCurrencies` so the UI/export can surface a warning.
+export function sumRange(items, rates = {}) {
   let low = 0, high = 0;
-  items.forEach((o) => { if (o && o.cost) { low += o.cost.low; high += o.cost.high; } });
-  return { low, high };
+  const missing = new Set();
+  items.forEach((o) => {
+    if (!o || !o.cost) return;
+    const converted = convertToBase(o.cost, rates);
+    if (converted.missingRate) { missing.add(o.cost.currency); return; }
+    low += converted.low;
+    high += converted.high;
+  });
+  return { low, high, missingCurrencies: Array.from(missing) };
 }
 
 // Cartesian product of every travel/stay group's options, summed and ranked
@@ -312,38 +372,40 @@ export function sumRange(items) {
 // universal/''). This means a combo can never pair, say, a 14-19 Aug flight
 // with a 13-18 Aug hotel. `cap` bounds the raw (pre-pruning) product as a
 // safety valve; the returned `count` is the real number of valid combos.
-export function enumerateCombinations(groups, cap = 4000) {
+export function enumerateCombinations(groups, rates = {}, cap = 4000) {
   const rawCount = groups.reduce((p, g) => p * g.options.length, 1);
   if (rawCount > cap) return { combos: [], count: rawCount, truncated: true };
   let combos = [{ picks: [], low: 0, high: 0, window: '' }];
+  const missing = new Set();
   groups.forEach((g) => {
     const next = [];
     combos.forEach((c) => {
       g.options.forEach((o) => {
         const optWindow = o.window || '';
         if (c.window && optWindow && c.window !== optWindow) return;
-        const costLow = o.cost ? o.cost.low : 0;
-        const costHigh = o.cost ? o.cost.high : 0;
+        const converted = o.cost ? convertToBase(o.cost, rates) : { low: 0, high: 0, missingRate: false };
+        if (converted.missingRate) { missing.add(o.cost.currency); return; }
         next.push({
           picks: [...c.picks, { key: g.key, kind: g.kind, option: o }],
-          low: c.low + costLow,
-          high: c.high + costHigh,
+          low: c.low + converted.low,
+          high: c.high + converted.high,
           window: c.window || optWindow,
         });
       });
     });
     combos = next;
   });
-  return { combos, count: combos.length, truncated: false };
+  return { combos, count: combos.length, truncated: false, missingCurrencies: Array.from(missing) };
 }
 
-function withMid(r) { return { low: r.low, mid: (r.low + r.high) / 2, high: r.high }; }
+function withMid(r) { return { low: r.low, mid: (r.low + r.high) / 2, high: r.high, missingCurrencies: r.missingCurrencies || [] }; }
 
 function comboKey(picks) { return picks.map((p) => `${p.key}:${p.option.idx}`).join('|'); }
 
 // Snapshot of the current picks, cost breakdown, and full ranked combination
 // list, suitable for JSON.stringify or toMarkdown().
 export function buildExportData(parsed, selection, route) {
+  const rates = parsed.rates || {};
   const travelPicks = parsed.travel.map((g) => {
     const o = pickedOption(g, selection.travel);
     return { leg: g.key, option: o.label, departure: o.time.from, arrival: o.time.to, cost: o.cost, window: o.window || null, detail: o.detail || null };
@@ -354,12 +416,15 @@ export function buildExportData(parsed, selection, route) {
   });
   const activityList = parsed.activities.map((a) => ({ name: a.label, cost: a.cost, included: !!selection.activity[a.idx] }));
 
-  const travelRange = sumRange(parsed.travel.map((g) => pickedOption(g, selection.travel)));
-  const stayRange = sumRange(parsed.stay.map((g) => pickedOption(g, selection.stay)));
-  const activityRange = sumRange(parsed.activities.filter((a) => selection.activity[a.idx]));
+  const travelRange = sumRange(parsed.travel.map((g) => pickedOption(g, selection.travel)), rates);
+  const stayRange = sumRange(parsed.stay.map((g) => pickedOption(g, selection.stay)), rates);
+  const activityRange = sumRange(parsed.activities.filter((a) => selection.activity[a.idx]), rates);
   const totalRange = {
     low: travelRange.low + stayRange.low + activityRange.low,
     high: travelRange.high + stayRange.high + activityRange.high,
+    missingCurrencies: Array.from(new Set([
+      ...travelRange.missingCurrencies, ...stayRange.missingCurrencies, ...activityRange.missingCurrencies,
+    ])),
   };
 
   const groups = [];
@@ -367,10 +432,14 @@ export function buildExportData(parsed, selection, route) {
   parsed.stay.forEach((g) => groups.push({ kind: 'stay', key: g.key, options: g.options }));
 
   const combosOut = { totalCount: 0, truncated: false, ranked: [] };
+  const missingCurrencies = new Set([
+    ...travelRange.missingCurrencies, ...stayRange.missingCurrencies, ...activityRange.missingCurrencies,
+  ]);
   if (groups.length >= 2) {
-    const result = enumerateCombinations(groups, 4000);
+    const result = enumerateCombinations(groups, rates, 4000);
     combosOut.truncated = result.truncated;
     combosOut.totalCount = result.truncated ? result.count : result.combos.length;
+    (result.missingCurrencies || []).forEach((c) => missingCurrencies.add(c));
     if (!result.truncated) {
       const withOffset = result.combos.map((c) => ({
         picks: c.picks,
@@ -404,6 +473,7 @@ export function buildExportData(parsed, selection, route) {
       total: withMid(totalRange),
     },
     combinations: combosOut,
+    missingRates: Array.from(missingCurrencies),
     notes: parsed.notes,
   };
 }
@@ -411,8 +481,9 @@ export function buildExportData(parsed, selection, route) {
 function costCell(c) {
   if (!c) return 'n/a';
   if (c.isFree) return 'free';
-  if (c.low === c.high) return euro(c.low);
-  return `${euro(c.low)}–${euro(c.high)}`;
+  const cur = c.currency || 'EUR';
+  if (c.low === c.high) return formatMoney(c.low, cur);
+  return `${formatMoney(c.low, cur)}–${formatMoney(c.high, cur)}`;
 }
 
 export function toMarkdown(data) {
@@ -452,6 +523,11 @@ export function toMarkdown(data) {
     .forEach(([label, r]) => lines.push(`| ${label} | ${euro(r.low)} | ${euro(r.mid)} | ${euro(r.high)} |`));
   lines.push(`| **Total** | **${euro(data.costBreakdown.total.low)}** | **${euro(data.costBreakdown.total.mid)}** | **${euro(data.costBreakdown.total.high)}** |`);
   lines.push('');
+
+  if (data.missingRates && data.missingRates.length) {
+    lines.push(`⚠️ Costs in ${data.missingRates.join(', ')} are excluded from totals and combinations above — add a \`RATE: <code> <eur-per-unit>\` line to the notes to include them (e.g. \`RATE: ${data.missingRates[0]} 0.03\`).`);
+    lines.push('');
+  }
 
   if (data.combinations.truncated) {
     lines.push('## Time-Window Cost Analysis');

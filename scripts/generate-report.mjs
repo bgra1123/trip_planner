@@ -71,6 +71,12 @@ function main() {
     `Parsed ${parsed.travel.length} travel leg(s), ${parsed.stay.length} stay(s), ` +
     `${parsed.activities.length} activity(ies). Wrote:\n  ${jsonPath}\n  ${mdPath}`
   );
+  if (data.missingRates.length) {
+    console.error(
+      `Warning: costs in ${data.missingRates.join(', ')} have no RATE: line and were excluded ` +
+      `from totals/combinations. Add e.g. "RATE: ${data.missingRates[0]} 0.018" to the notes to include them.`
+    );
+  }
 }
 
 main();

@@ -73,7 +73,7 @@ function stripKnownTokens(text, opts = {}) {
   return cleanup(out);
 }
 
-function parseLine(raw, idx) {
+function parseLine(raw, idx, window) {
   const line = raw.trim();
   if (!line || line.charAt(0) === '#') return null;
   const tagMatch = line.match(/^([A-Za-z]+)\s*:\s*(.*)$/);
@@ -115,7 +115,30 @@ function parseLine(raw, idx) {
     detail = '';
   }
 
-  return { idx, category, tag, groupKey, label, raw: line, time, cost, detail };
+  return { idx, category, tag, groupKey, label, raw: line, time, cost, detail, window: window || '' };
+}
+
+// A `WINDOW: <label>` line sets the date-window context for every entry
+// until the next WINDOW: line; `WINDOW:` with no label (or none/any/all)
+// clears it back to universal. WINDOW: lines never become entries
+// themselves. Lets a user paste two (or more) rounds of price research —
+// e.g. "14-19 Aug" and "13-18 Aug" — into one notes block without the
+// combination logic ever pairing options from different windows.
+function splitWindowedLines(text) {
+  const lines = text.split('\n');
+  let currentWindow = '';
+  const out = [];
+  lines.forEach((raw, idx) => {
+    const line = raw.trim();
+    const windowMatch = line.match(/^WINDOW\s*:\s*(.*)$/i);
+    if (windowMatch) {
+      const label = windowMatch[1].trim();
+      currentWindow = (!label || /^(none|any|all)$/i.test(label)) ? '' : label;
+      return;
+    }
+    out.push({ raw, idx, window: currentWindow });
+  });
+  return out;
 }
 
 // Shared by parseNotes (entries from raw text lines) and groupRows (entries
@@ -156,20 +179,46 @@ function groupEntries(entries) {
   };
 }
 
-export function parseNotes(text) {
-  const lines = text.split('\n');
-  const entries = [];
-  for (let i = 0; i < lines.length; i++) {
-    const e = parseLine(lines[i], i);
-    if (e) entries.push(e);
+// Chain travel legs by matching "to" -> next leg's "from", instead of
+// assuming groups appear in trip order — notes are often grouped by
+// price-research session (e.g. all WINDOW: blocks together), not
+// chronologically. Falls back to appending any disconnected legs as-is.
+export function deriveRouteChain(travelGroups) {
+  if (!travelGroups.length) return [];
+  const edges = travelGroups.map((g) => {
+    const parts = g.key.split(' → ');
+    return { from: parts[0], to: parts[1] || g.key, key: g.key };
+  });
+  const byFrom = {}, toSet = {};
+  edges.forEach((e) => { byFrom[e.from] = e; toSet[e.to] = true; });
+  const start = edges.find((e) => !toSet[e.from]) || edges[0];
+  const chain = [start.from];
+  const seen = {};
+  let cur = start;
+  while (cur && !seen[cur.key]) {
+    seen[cur.key] = true;
+    chain.push(cur.to);
+    cur = byFrom[cur.to];
   }
+  if (Object.keys(seen).length < edges.length) {
+    edges.forEach((e) => { if (!seen[e.key]) { chain.push(e.from, e.to); } });
+  }
+  return chain;
+}
+
+export function parseNotes(text) {
+  const entries = [];
+  splitWindowedLines(text).forEach(({ raw, idx, window }) => {
+    const e = parseLine(raw, idx, window);
+    if (e) entries.push(e);
+  });
   return groupEntries(entries);
 }
 
 let nextRowId = 1;
 export function newRowId() { return `r${nextRowId++}`; }
 export function newRow(category = 'travel') {
-  return { id: newRowId(), category, group: '', option: '', timeText: '', costText: '', detail: '' };
+  return { id: newRowId(), category, group: '', option: '', timeText: '', costText: '', detail: '', window: '' };
 }
 
 // One-time conversion of pasted/typed shorthand text into editable table
@@ -177,13 +226,12 @@ export function newRow(category = 'travel') {
 // to (re)build the table from text — it never runs automatically, since that
 // would clobber in-progress table edits.
 export function linesToRows(text) {
-  const lines = text.split('\n');
   const rows = [];
   const notes = [];
-  for (let i = 0; i < lines.length; i++) {
-    const e = parseLine(lines[i], i);
-    if (!e) continue;
-    if (e.category === 'note') { notes.push(e.label || e.raw); continue; }
+  splitWindowedLines(text).forEach(({ raw, idx, window }) => {
+    const e = parseLine(raw, idx, window);
+    if (!e) return;
+    if (e.category === 'note') { notes.push(e.label || e.raw); return; }
     rows.push({
       id: newRowId(),
       category: e.category,
@@ -192,8 +240,9 @@ export function linesToRows(text) {
       timeText: e.time.from && e.time.to ? `${e.time.from}-${e.time.to}` : (e.time.from || ''),
       costText: costText(e.cost),
       detail: e.detail || '',
+      window: e.window || '',
     });
-  }
+  });
   return { rows, notes };
 }
 
@@ -211,18 +260,28 @@ export function groupRows(rows, notes = []) {
       time: parseTimes(r.timeText || ''),
       cost: parseCost(r.costText || ''),
       detail: r.detail || '',
+      window: r.window || '',
       raw: '',
     }));
   return { ...groupEntries(entries), notes };
+}
+
+// Resolve a group's currently-selected option by id, falling back to the
+// first option if the selected id no longer exists (e.g. a deleted row).
+// Works regardless of whether idx is a text-import line number (parseNotes)
+// or an editable-table row id (groupRows) — it never assumes a scheme.
+export function pickedOption(group, selMap) {
+  const id = selMap[group.key];
+  return group.options.find((o) => o.idx === id) || group.options[0];
 }
 
 // First option per travel/stay group, all activities included — the same
 // defaults the UI applies to a freshly-parsed set of notes.
 export function defaultSelection(parsed) {
   const travel = {};
-  parsed.travel.forEach((g) => { travel[g.key] = 0; });
+  parsed.travel.forEach((g) => { travel[g.key] = g.options[0].idx; });
   const stay = {};
-  parsed.stay.forEach((g) => { stay[g.key] = 0; });
+  parsed.stay.forEach((g) => { stay[g.key] = g.options[0].idx; });
   const activity = {};
   parsed.activities.forEach((a) => { activity[a.idx] = true; });
   return { travel, stay, activity };
@@ -247,49 +306,56 @@ export function sumRange(items) {
   return { low, high };
 }
 
-// Cartesian product of every travel/stay group's options, summed and ranked by cost.
-// Returns { combos: [], count, truncated: true } instead of enumerating past `cap`.
+// Cartesian product of every travel/stay group's options, summed and ranked
+// by cost — except a partial combination is only extended with an option
+// whose window is compatible (same non-empty window, or either side
+// universal/''). This means a combo can never pair, say, a 14-19 Aug flight
+// with a 13-18 Aug hotel. `cap` bounds the raw (pre-pruning) product as a
+// safety valve; the returned `count` is the real number of valid combos.
 export function enumerateCombinations(groups, cap = 4000) {
-  const count = groups.reduce((p, g) => p * g.options.length, 1);
-  if (count > cap) return { combos: [], count, truncated: true };
-  let combos = [{ picks: [], low: 0, high: 0 }];
+  const rawCount = groups.reduce((p, g) => p * g.options.length, 1);
+  if (rawCount > cap) return { combos: [], count: rawCount, truncated: true };
+  let combos = [{ picks: [], low: 0, high: 0, window: '' }];
   groups.forEach((g) => {
     const next = [];
     combos.forEach((c) => {
-      g.options.forEach((o, i) => {
+      g.options.forEach((o) => {
+        const optWindow = o.window || '';
+        if (c.window && optWindow && c.window !== optWindow) return;
         const costLow = o.cost ? o.cost.low : 0;
         const costHigh = o.cost ? o.cost.high : 0;
         next.push({
-          picks: [...c.picks, { key: g.key, kind: g.kind, i, option: o }],
+          picks: [...c.picks, { key: g.key, kind: g.kind, option: o }],
           low: c.low + costLow,
           high: c.high + costHigh,
+          window: c.window || optWindow,
         });
       });
     });
     combos = next;
   });
-  return { combos, count, truncated: false };
+  return { combos, count: combos.length, truncated: false };
 }
 
 function withMid(r) { return { low: r.low, mid: (r.low + r.high) / 2, high: r.high }; }
 
-function comboKey(picks) { return picks.map((p) => `${p.key}:${p.i}`).join('|'); }
+function comboKey(picks) { return picks.map((p) => `${p.key}:${p.option.idx}`).join('|'); }
 
 // Snapshot of the current picks, cost breakdown, and full ranked combination
 // list, suitable for JSON.stringify or toMarkdown().
 export function buildExportData(parsed, selection, route) {
   const travelPicks = parsed.travel.map((g) => {
-    const o = g.options[selection.travel[g.key] || 0];
-    return { leg: g.key, option: o.label, departure: o.time.from, arrival: o.time.to, cost: o.cost, detail: o.detail || null };
+    const o = pickedOption(g, selection.travel);
+    return { leg: g.key, option: o.label, departure: o.time.from, arrival: o.time.to, cost: o.cost, window: o.window || null, detail: o.detail || null };
   });
   const stayPicks = parsed.stay.map((g) => {
-    const o = g.options[selection.stay[g.key] || 0];
-    return { place: g.key, option: o.label, cost: o.cost, nights: o.cost ? o.cost.nights : 1, detail: o.detail || null };
+    const o = pickedOption(g, selection.stay);
+    return { place: g.key, option: o.label, cost: o.cost, window: o.window || null, nights: o.cost ? o.cost.nights : 1, detail: o.detail || null };
   });
   const activityList = parsed.activities.map((a) => ({ name: a.label, cost: a.cost, included: !!selection.activity[a.idx] }));
 
-  const travelRange = sumRange(parsed.travel.map((g) => g.options[selection.travel[g.key] || 0]));
-  const stayRange = sumRange(parsed.stay.map((g) => g.options[selection.stay[g.key] || 0]));
+  const travelRange = sumRange(parsed.travel.map((g) => pickedOption(g, selection.travel)));
+  const stayRange = sumRange(parsed.stay.map((g) => pickedOption(g, selection.stay)));
   const activityRange = sumRange(parsed.activities.filter((a) => selection.activity[a.idx]));
   const totalRange = {
     low: travelRange.low + stayRange.low + activityRange.low,
@@ -311,14 +377,16 @@ export function buildExportData(parsed, selection, route) {
         low: c.low + activityRange.low,
         high: c.high + activityRange.high,
         mid: (c.low + c.high) / 2 + (activityRange.low + activityRange.high) / 2,
+        window: c.window,
       }));
       withOffset.sort((a, b) => a.mid - b.mid);
       const currentKey = groups
-        .map((g) => `${g.key}:${g.kind === 'travel' ? (selection.travel[g.key] || 0) : (selection.stay[g.key] || 0)}`)
+        .map((g) => `${g.key}:${g.kind === 'travel' ? selection.travel[g.key] : selection.stay[g.key]}`)
         .join('|');
       combosOut.ranked = withOffset.map((c, idx) => ({
         rank: idx + 1,
         picks: c.picks.map((p) => ({ group: p.key, option: p.option.label })),
+        window: c.window || null,
         low: c.low, mid: c.mid, high: c.high,
         isCurrent: comboKey(c.picks) === currentKey,
       }));
@@ -357,14 +425,14 @@ export function toMarkdown(data) {
   if (data.currentPick.travel.length) {
     lines.push('### Travel');
     data.currentPick.travel.forEach((t) => {
-      lines.push(`- **${t.leg}**: ${t.option}${t.departure ? ` (${t.departure}${t.arrival ? `–${t.arrival}` : ''})` : ''} — ${costCell(t.cost)}`);
+      lines.push(`- **${t.leg}**: ${t.option}${t.departure ? ` (${t.departure}${t.arrival ? `–${t.arrival}` : ''})` : ''} — ${costCell(t.cost)}${t.window ? ` [${t.window}]` : ''}`);
     });
     lines.push('');
   }
   if (data.currentPick.stay.length) {
     lines.push('### Accommodation');
     data.currentPick.stay.forEach((s) => {
-      lines.push(`- **${s.place}**: ${s.option} — ${costCell(s.cost)}${s.nights > 1 ? ` (${s.nights} nights)` : ''}`);
+      lines.push(`- **${s.place}**: ${s.option} — ${costCell(s.cost)}${s.nights > 1 ? ` (${s.nights} nights)` : ''}${s.window ? ` [${s.window}]` : ''}`);
     });
     lines.push('');
   }
@@ -391,13 +459,16 @@ export function toMarkdown(data) {
     lines.push('');
   } else if (data.combinations.ranked.length) {
     const groupNames = data.combinations.ranked[0].picks.map((p) => p.group);
+    const hasWindows = data.combinations.ranked.some((c) => c.window);
+    const windowCol = hasWindows ? ' Window |' : '';
     lines.push(`## Time-Window Cost Analysis (${data.combinations.totalCount.toLocaleString('en-US')} combination${data.combinations.totalCount === 1 ? '' : 's'})`);
-    lines.push(`| # | ${groupNames.join(' | ')} | Low | Likely | High |`);
-    lines.push(`|${groupNames.concat(['#', 'Low', 'Likely', 'High']).map(() => '---').join('|')}|`);
+    lines.push(`| # | ${groupNames.join(' | ')} |${windowCol} Low | Likely | High |`);
+    lines.push(`|${groupNames.concat(hasWindows ? ['#', 'Window', 'Low', 'Likely', 'High'] : ['#', 'Low', 'Likely', 'High']).map(() => '---').join('|')}|`);
     data.combinations.ranked.forEach((c) => {
       const marker = `${c.rank === 1 ? '★' : ''}${c.rank}${c.isCurrent ? ' (current)' : ''}`;
       const opts = c.picks.map((p) => p.option).join(' | ');
-      lines.push(`| ${marker} | ${opts} | ${euro(c.low)} | ${euro(c.mid)} | ${euro(c.high)} |`);
+      const windowCell = hasWindows ? ` ${c.window || '—'} |` : '';
+      lines.push(`| ${marker} | ${opts} |${windowCell} ${euro(c.low)} | ${euro(c.mid)} | ${euro(c.high)} |`);
     });
     lines.push('');
   }
@@ -411,18 +482,27 @@ export function toMarkdown(data) {
   return lines.join('\n');
 }
 
-export const DEFAULT_TRIP_NOTES = `FLIGHT: IST to MUN, 6:45-11:30, EUR2100, Turkish Airlines
-FLIGHT: IST to MUN, 7:25-9:05, EUR2800, Turkish Airlines
-FLIGHT: IST to MUN, 10:00-11:45, EUR34500, Turkish Airlines
-TRAIN: MUN to MILAN evening, 18:00-20:00 to 02:00-04:00, EUR250-350
+export const DEFAULT_TRIP_NOTES = `TRAIN: MUN to MILAN evening, 18:00-20:00 to 02:00-04:00, EUR250-350
 TRAIN: MUN to MILAN morning, 08:00-10:00 to 15:00-17:00, EUR250-350
 HOTEL: Munich - near Hauptbahnhof, EUR120/night x1, rest stop before train
-HOTEL: Milan - family room near Duomo, EUR140/night x3, walk to metro
-HOTEL: Milan - apartment near Malpensa train link, EUR110/night x3, more space, longer transit
 ACTIVITY: Duomo rooftop terraces, EUR40
 ACTIVITY: Sforza Castle courtyard + park, free
 ACTIVITY: Navigli canal evening walk, free
+
+WINDOW: 14-19 Aug
+FLIGHT: IST to MUN, 6:45-11:30, EUR2100, Turkish Airlines
+FLIGHT: IST to MUN, 7:25-9:05, EUR2800, Turkish Airlines
+HOTEL: Milan - family room near Duomo, EUR140/night x3, walk to metro
+HOTEL: Milan - apartment near Malpensa train link, EUR110/night x3, more space, longer transit
+
+WINDOW: 13-18 Aug
+FLIGHT: IST to MUN, 6:30-11:10, EUR1950, Turkish Airlines
+FLIGHT: IST to MUN, 9:15-13:50, EUR2600, Turkish Airlines
+HOTEL: Milan - family room near Duomo, EUR160/night x3, walk to metro
+HOTEL: Milan - apartment near Malpensa train link, EUR125/night x3, more space, longer transit
+
 NOTE: Infant-friendly: MXP (train) preferred over BGY (bus)
 NOTE: Munich: 1 day allows arrival rest plus a quick visit
 NOTE: Book hotels near transit for flexibility
+NOTE: Use WINDOW: <label> to tag a block of options with a date range — combinations never mix options from different windows
 `;

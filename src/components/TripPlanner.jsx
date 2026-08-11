@@ -1,10 +1,10 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   groupRows, linesToRows, newRow, costLabel, euro, sumRange, enumerateCombinations,
-  buildExportData, toMarkdown, DEFAULT_TRIP_NOTES,
+  buildExportData, toMarkdown, deriveRouteChain, DEFAULT_TRIP_NOTES,
 } from '../utils/parseTripNotes';
 
-const COMBO_DISPLAY_LIMIT = 12;
+const COMBO_DISPLAY_LIMIT = 3;
 const COMBO_CAP = 4000;
 
 const CAT_NODE = { travel: 'bg-blue-500', stay: 'bg-purple-500', activity: 'bg-green-500' };
@@ -98,12 +98,7 @@ export default function TripPlanner() {
     return sum + (o && o.cost && o.cost.nights ? o.cost.nights : 1);
   }, 0);
 
-  const headerStops = [];
-  parsed.travel.forEach((g) => {
-    const parts = g.key.split(' → ');
-    if (headerStops.length === 0) headerStops.push(parts[0]);
-    headerStops.push(parts[1] || g.key);
-  });
+  const headerStops = deriveRouteChain(parsed.travel);
 
   const comboGroups = useMemo(() => {
     const groups = [];
@@ -121,6 +116,7 @@ export default function TripPlanner() {
       low: c.low + activityRange.low,
       high: c.high + activityRange.high,
       mid: (c.low + c.high) / 2 + (activityRange.low + activityRange.high) / 2,
+      window: c.window,
     }));
     withOffset.sort((a, b) => a.mid - b.mid);
     return withOffset;
@@ -188,7 +184,10 @@ export default function TripPlanner() {
             times (<code className="bg-slate-100 rounded px-1">6:45-11:30</code>), and a cost
             (<code className="bg-slate-100 rounded px-1">€2100</code>, <code className="bg-slate-100 rounded px-1">€250-350</code>,{' '}
             <code className="bg-slate-100 rounded px-1">€90/night x3</code>, or <code className="bg-slate-100 rounded px-1">free</code>).
-            Repeat a tag with the same route/place for alternative options.
+            Repeat a tag with the same route/place for alternative options. Put a{' '}
+            <code className="bg-slate-100 rounded px-1">WINDOW: 14-19 Aug</code> line before a block of options to tag them
+            with a date range — combinations will never mix options from different windows;{' '}
+            <code className="bg-slate-100 rounded px-1">WINDOW:</code> alone clears it.
           </p>
           <textarea
             value={notesText}
@@ -235,6 +234,7 @@ export default function TripPlanner() {
                   <th className="text-left font-medium px-2 py-2">Pick</th>
                   <th className="text-left font-medium px-2 py-2">Category</th>
                   <th className="text-left font-medium px-2 py-2">Group / Leg</th>
+                  <th className="text-left font-medium px-2 py-2">Window</th>
                   <th className="text-left font-medium px-2 py-2">Option</th>
                   <th className="text-left font-medium px-2 py-2">Time</th>
                   <th className="text-left font-medium px-2 py-2">Cost</th>
@@ -285,6 +285,15 @@ export default function TripPlanner() {
                           onChange={(e) => updateRow(row.id, 'group', e.target.value)}
                           placeholder={row.category === 'activity' ? 'n/a' : 'IST → MUN'}
                           disabled={row.category === 'activity'}
+                        />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input
+                          type="text"
+                          className={inputCls}
+                          value={row.window}
+                          onChange={(e) => updateRow(row.id, 'window', e.target.value)}
+                          placeholder="any"
                         />
                       </td>
                       <td className="px-2 py-1.5">
@@ -482,7 +491,7 @@ export default function TripPlanner() {
             ) : (
               <>
                 <p className="text-xs text-slate-500 mb-3">
-                  {rankedCombos.length.toLocaleString('en-US')} combination{rankedCombos.length === 1 ? '' : 's'} across your travel and stay picks, cheapest first. Click a row to apply it.
+                  {rankedCombos.length.toLocaleString('en-US')} valid combination{rankedCombos.length === 1 ? '' : 's'} across your travel and stay picks, cheapest first. Click a row to apply it.
                 </p>
                 <table className="w-full text-xs whitespace-nowrap">
                   <thead>
@@ -491,6 +500,7 @@ export default function TripPlanner() {
                       {comboGroups.map((g) => (
                         <th key={g.key} className="text-left font-medium pb-2 pr-4">{g.key}</th>
                       ))}
+                      {rankedCombos.some((c) => c.window) && <th className="text-left font-medium pb-2 pr-4">Window</th>}
                       <th className="text-right font-medium pb-2 pl-4">Low</th>
                       <th className="text-right font-medium pb-2 pl-4">Likely</th>
                       <th className="text-right font-medium pb-2 pl-4">High</th>
@@ -501,6 +511,7 @@ export default function TripPlanner() {
                     {displayCombos.map(({ combo, rank }) => {
                       const isCheapest = rank === 0;
                       const isCurrent = comboKey(combo.picks) === currentPicksKey;
+                      const hasWindows = rankedCombos.some((c) => c.window);
                       return (
                         <tr
                           key={comboKey(combo.picks)}
@@ -511,6 +522,7 @@ export default function TripPlanner() {
                           {combo.picks.map((p) => (
                             <td key={p.key} className="py-1.5 pr-4 text-slate-700">{p.option.label}</td>
                           ))}
+                          {hasWindows && <td className="py-1.5 pr-4 text-slate-700">{combo.window || '—'}</td>}
                           <td className="py-1.5 pl-4 text-right text-slate-900">{euro(combo.low)}</td>
                           <td className="py-1.5 pl-4 text-right text-slate-900">{euro(combo.mid)}</td>
                           <td className="py-1.5 pl-4 text-right text-slate-900">{euro(combo.high)}</td>

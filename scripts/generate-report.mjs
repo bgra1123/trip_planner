@@ -15,6 +15,7 @@ import {
   defaultSelection,
   buildExportData,
   toMarkdown,
+  deriveRouteChain,
 } from '../src/utils/parseTripNotes.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -39,14 +40,8 @@ function readStdin() {
 }
 
 function deriveRoute(parsed) {
-  if (!parsed.travel.length) return null;
-  const stops = [];
-  parsed.travel.forEach((g) => {
-    const parts = g.key.split(' → ');
-    if (stops.length === 0) stops.push(parts[0]);
-    stops.push(parts[1] || g.key);
-  });
-  return stops.join(' → ');
+  const stops = deriveRouteChain(parsed.travel);
+  return stops.length ? stops.join(' → ') : null;
 }
 
 function main() {

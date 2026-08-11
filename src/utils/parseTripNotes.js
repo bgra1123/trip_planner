@@ -151,6 +151,18 @@ export function parseNotes(text) {
   };
 }
 
+// First option per travel/stay group, all activities included — the same
+// defaults the UI applies to a freshly-parsed set of notes.
+export function defaultSelection(parsed) {
+  const travel = {};
+  parsed.travel.forEach((g) => { travel[g.key] = 0; });
+  const stay = {};
+  parsed.stay.forEach((g) => { stay[g.key] = 0; });
+  const activity = {};
+  parsed.activities.forEach((a) => { activity[a.idx] = true; });
+  return { travel, stay, activity };
+}
+
 export function euro(n) {
   const sign = n < 0 ? '-' : '';
   n = Math.abs(Math.round(n));
@@ -314,7 +326,7 @@ export function toMarkdown(data) {
     lines.push('');
   } else if (data.combinations.ranked.length) {
     const groupNames = data.combinations.ranked[0].picks.map((p) => p.group);
-    lines.push(`## Time-Window Cost Analysis (${data.combinations.totalCount.toLocaleString('en-US')} combinations)`);
+    lines.push(`## Time-Window Cost Analysis (${data.combinations.totalCount.toLocaleString('en-US')} combination${data.combinations.totalCount === 1 ? '' : 's'})`);
     lines.push(`| # | ${groupNames.join(' | ')} | Low | Likely | High |`);
     lines.push(`|${groupNames.concat(['#', 'Low', 'Likely', 'High']).map(() => '---').join('|')}|`);
     data.combinations.ranked.forEach((c) => {

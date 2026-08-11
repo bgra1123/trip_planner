@@ -1,5 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { parseNotes, costLabel, euro, sumRange, DEFAULT_TRIP_NOTES } from '../utils/parseTripNotes';
+import { parseNotes, costLabel, euro, sumRange, enumerateCombinations, DEFAULT_TRIP_NOTES } from '../utils/parseTripNotes';
+
+const COMBO_DISPLAY_LIMIT = 12;
+const COMBO_CAP = 4000;
 
 const CAT_DOT = { travel: 'bg-blue-500', stay: 'bg-purple-500', activity: 'bg-green-500' };
 const CAT_NODE = { travel: 'bg-blue-500', stay: 'bg-purple-500', activity: 'bg-green-500' };
@@ -55,6 +58,47 @@ export default function TripPlanner() {
   }
   function toggleActivity(idx) {
     setSelection((s) => ({ ...s, activity: { ...s.activity, [idx]: !s.activity[idx] } }));
+  }
+  function applyCombo(picks) {
+    setSelection((s) => {
+      const travel = { ...s.travel };
+      const stay = { ...s.stay };
+      picks.forEach((p) => { if (p.kind === 'travel') travel[p.key] = p.i; else stay[p.key] = p.i; });
+      return { ...s, travel, stay };
+    });
+  }
+
+  const comboGroups = useMemo(() => {
+    const groups = [];
+    parsed.travel.forEach((g) => groups.push({ kind: 'travel', key: g.key, options: g.options }));
+    parsed.stay.forEach((g) => groups.push({ kind: 'stay', key: g.key, options: g.options }));
+    return groups;
+  }, [parsed]);
+
+  const comboResult = useMemo(() => enumerateCombinations(comboGroups, COMBO_CAP), [comboGroups]);
+
+  const rankedCombos = useMemo(() => {
+    if (comboResult.truncated) return null;
+    const withOffset = comboResult.combos.map((c) => ({
+      picks: c.picks,
+      low: c.low + activityRange.low,
+      high: c.high + activityRange.high,
+      mid: (c.low + c.high) / 2 + (activityRange.low + activityRange.high) / 2,
+    }));
+    withOffset.sort((a, b) => a.mid - b.mid);
+    return withOffset;
+  }, [comboResult, activityRange.low, activityRange.high]);
+
+  const comboKey = (picks) => picks.map((p) => `${p.key}:${p.i}`).join('|');
+  const currentPicksKey = comboGroups
+    .map((g) => `${g.key}:${g.kind === 'travel' ? (selection.travel[g.key] || 0) : (selection.stay[g.key] || 0)}`)
+    .join('|');
+  const currentRank = rankedCombos ? rankedCombos.findIndex((c) => comboKey(c.picks) === currentPicksKey) : -1;
+  const displayCombos = rankedCombos
+    ? rankedCombos.slice(0, COMBO_DISPLAY_LIMIT).map((c, i) => ({ combo: c, rank: i }))
+    : [];
+  if (rankedCombos && currentRank >= COMBO_DISPLAY_LIMIT) {
+    displayCombos.push({ combo: rankedCombos[currentRank], rank: currentRank });
   }
 
   const total = parsed.travel.length + parsed.stay.length + parsed.activities.length + parsed.notes.length;
@@ -313,6 +357,62 @@ export default function TripPlanner() {
             </div>
           </div>
         </div>
+
+        {/* Time-Window Cost Analysis */}
+        {comboGroups.length >= 2 && (
+          <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mb-6 overflow-x-auto">
+            <h3 className="text-sm font-semibold text-amber-700 mb-1 uppercase tracking-wide">Time-Window Cost Analysis</h3>
+            {comboResult.truncated ? (
+              <p className="text-xs text-slate-500">
+                {comboResult.count.toLocaleString('en-US')} possible combinations — narrow the alternatives per leg to see a ranked comparison.
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-slate-500 mb-3">
+                  {rankedCombos.length.toLocaleString('en-US')} combination{rankedCombos.length === 1 ? '' : 's'} across your travel and stay picks, cheapest first. Click a row to apply it.
+                </p>
+                <table className="w-full text-xs whitespace-nowrap">
+                  <thead>
+                    <tr className="text-slate-500 uppercase text-[0.65rem] tracking-wide">
+                      <th className="text-left font-medium pb-2 pr-3">#</th>
+                      {comboGroups.map((g) => (
+                        <th key={g.key} className="text-left font-medium pb-2 pr-4">{g.key}</th>
+                      ))}
+                      <th className="text-right font-medium pb-2 pl-4">Low</th>
+                      <th className="text-right font-medium pb-2 pl-4">Likely</th>
+                      <th className="text-right font-medium pb-2 pl-4">High</th>
+                      <th className="pb-2 pl-3"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {displayCombos.map(({ combo, rank }) => {
+                      const isCheapest = rank === 0;
+                      const isCurrent = comboKey(combo.picks) === currentPicksKey;
+                      return (
+                        <tr
+                          key={comboKey(combo.picks)}
+                          onClick={() => applyCombo(combo.picks)}
+                          className={`border-t border-slate-100 cursor-pointer hover:bg-blue-50 ${isCurrent ? 'bg-blue-50 font-semibold' : ''}`}
+                        >
+                          <td className="py-1.5 pr-3 text-slate-500">{isCheapest ? '★ ' : ''}{rank + 1}</td>
+                          {combo.picks.map((p) => (
+                            <td key={p.key} className="py-1.5 pr-4 text-slate-700">{p.option.label}</td>
+                          ))}
+                          <td className="py-1.5 pl-4 text-right text-slate-900">{euro(combo.low)}</td>
+                          <td className="py-1.5 pl-4 text-right text-slate-900">{euro(combo.mid)}</td>
+                          <td className="py-1.5 pl-4 text-right text-slate-900">{euro(combo.high)}</td>
+                          <td className="py-1.5 pl-3">
+                            {isCurrent && <span className="text-[0.65rem] uppercase tracking-wide bg-amber-100 text-amber-700 rounded px-1.5 py-0.5">current</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </div>
+        )}
 
         {/* Notes */}
         {parsed.notes.length > 0 && (

@@ -170,6 +170,30 @@ export function sumRange(items) {
   return { low, high };
 }
 
+// Cartesian product of every travel/stay group's options, summed and ranked by cost.
+// Returns { combos: [], count, truncated: true } instead of enumerating past `cap`.
+export function enumerateCombinations(groups, cap = 4000) {
+  const count = groups.reduce((p, g) => p * g.options.length, 1);
+  if (count > cap) return { combos: [], count, truncated: true };
+  let combos = [{ picks: [], low: 0, high: 0 }];
+  groups.forEach((g) => {
+    const next = [];
+    combos.forEach((c) => {
+      g.options.forEach((o, i) => {
+        const costLow = o.cost ? o.cost.low : 0;
+        const costHigh = o.cost ? o.cost.high : 0;
+        next.push({
+          picks: [...c.picks, { key: g.key, kind: g.kind, i, option: o }],
+          low: c.low + costLow,
+          high: c.high + costHigh,
+        });
+      });
+    });
+    combos = next;
+  });
+  return { combos, count, truncated: false };
+}
+
 export const DEFAULT_TRIP_NOTES = `FLIGHT: IST to MUN, 6:45-11:30, EUR2100, Turkish Airlines
 FLIGHT: IST to MUN, 7:25-9:05, EUR2800, Turkish Airlines
 FLIGHT: IST to MUN, 10:00-11:45, EUR34500, Turkish Airlines

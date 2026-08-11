@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { parseNotes, costLabel, euro, sumRange, enumerateCombinations, DEFAULT_TRIP_NOTES } from '../utils/parseTripNotes';
+import { parseNotes, costLabel, euro, sumRange, enumerateCombinations, buildExportData, toMarkdown, DEFAULT_TRIP_NOTES } from '../utils/parseTripNotes';
 
 const COMBO_DISPLAY_LIMIT = 12;
 const COMBO_CAP = 4000;
@@ -102,6 +102,26 @@ export default function TripPlanner() {
   }
 
   const total = parsed.travel.length + parsed.stay.length + parsed.activities.length + parsed.notes.length;
+
+  function downloadFile(filename, content, mime) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+  function handleExportJson() {
+    const data = buildExportData(parsed, selection, headerStops.length ? headerStops.join(' → ') : null);
+    downloadFile('trip-plan.json', JSON.stringify(data, null, 2), 'application/json');
+  }
+  function handleExportMarkdown() {
+    const data = buildExportData(parsed, selection, headerStops.length ? headerStops.join(' → ') : null);
+    downloadFile('trip-plan.md', toMarkdown(data), 'text/markdown');
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-4">
@@ -423,6 +443,28 @@ export default function TripPlanner() {
             </ul>
           </div>
         )}
+
+        {/* Export */}
+        <div className="bg-white rounded-lg p-4 shadow-sm border border-slate-200 mt-6">
+          <label className="block text-xs font-semibold text-slate-900 mb-2 uppercase tracking-wide">Export</label>
+          <p className="text-xs text-slate-500 mb-3">Download your current picks, the cost breakdown, and the full ranked combination list.</p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handleExportJson}
+              className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+            >
+              Download JSON
+            </button>
+            <button
+              type="button"
+              onClick={handleExportMarkdown}
+              className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 hover:border-blue-500"
+            >
+              Download Markdown
+            </button>
+          </div>
+        </div>
 
       </div>
     </div>

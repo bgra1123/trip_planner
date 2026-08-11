@@ -1,0 +1,14 @@
+/* index.css - Tailwind CSS included via CDN in HTML */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body {
+  margin: 0;
+  padding: 0;
+}
+
+#root {
+  width: 100%;
+  min-height: 100vh;
+}

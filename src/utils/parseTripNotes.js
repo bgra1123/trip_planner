@@ -558,7 +558,8 @@ export function toMarkdown(data) {
   return lines.join('\n');
 }
 
-export const DEFAULT_TRIP_NOTES = `TRAIN: MUN to MILAN evening, 18:00-20:00 to 02:00-04:00, EUR250-350
+export const DEFAULT_TRIP_NOTES = `RATE: TRY 0.01814
+TRAIN: MUN to MILAN evening, 18:00-20:00 to 02:00-04:00, EUR250-350
 TRAIN: MUN to MILAN morning, 08:00-10:00 to 15:00-17:00, EUR250-350
 HOTEL: Munich - near Hauptbahnhof, EUR120/night x1, rest stop before train
 ACTIVITY: Duomo rooftop terraces, EUR40
@@ -566,14 +567,14 @@ ACTIVITY: Sforza Castle courtyard + park, free
 ACTIVITY: Navigli canal evening walk, free
 
 WINDOW: 14-19 Aug
-FLIGHT: IST to MUN, 6:45-11:30, EUR2100, Turkish Airlines
-FLIGHT: IST to MUN, 7:25-9:05, EUR2800, Turkish Airlines
+FLIGHT: IST to MUN, 6:45-11:30, TRY116000, Turkish Airlines
+FLIGHT: IST to MUN, 7:25-9:05, TRY154000, Turkish Airlines
 HOTEL: Milan - family room near Duomo, EUR140/night x3, walk to metro
 HOTEL: Milan - apartment near Malpensa train link, EUR110/night x3, more space, longer transit
 
 WINDOW: 13-18 Aug
-FLIGHT: IST to MUN, 6:30-11:10, EUR1950, Turkish Airlines
-FLIGHT: IST to MUN, 9:15-13:50, EUR2600, Turkish Airlines
+FLIGHT: IST to MUN, 6:30-11:10, TRY107500, Turkish Airlines
+FLIGHT: IST to MUN, 9:15-13:50, TRY143000, Turkish Airlines
 HOTEL: Milan - family room near Duomo, EUR160/night x3, walk to metro
 HOTEL: Milan - apartment near Malpensa train link, EUR125/night x3, more space, longer transit
 
@@ -581,4 +582,5 @@ NOTE: Infant-friendly: MXP (train) preferred over BGY (bus)
 NOTE: Munich: 1 day allows arrival rest plus a quick visit
 NOTE: Book hotels near transit for flexibility
 NOTE: Use WINDOW: <label> to tag a block of options with a date range — combinations never mix options from different windows
+NOTE: Flight prices are quoted in Turkish Lira — the RATE: line above converts them to EUR for totals and comparisons
 `;

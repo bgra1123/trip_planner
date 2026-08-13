@@ -1,11 +1,33 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
-  groupRows, linesToRows, newRow, newRowId, costLabel, euro, sumRange, enumerateCombinations,
-  convertToBase, buildExportData, toMarkdown, deriveRouteChain, DEFAULT_TRIP_NOTES,
+  groupRows, linesToRows, newRow, newRowId, bumpRowIdCounter, costLabel, euro, sumRange, enumerateCombinations,
+  convertToBase, buildExportData, toMarkdown, deriveRouteChain, DEFAULT_TRIP_NOTES, costTextIssue,
 } from '../utils/parseTripNotes';
 
 function ratesToRows(rates) {
   return Object.entries(rates || {}).map(([code, factor]) => ({ id: newRowId(), code, factor: String(factor) }));
+}
+
+const STORAGE_KEY = 'trip-planner:v1';
+
+// Reads the last-saved trip once per mount. Bumps the row-id counter past
+// any restored id so a freshly added row can never collide with one that
+// was persisted — the counter itself resets to 1 on every page load, but
+// restored rows keep their original ids.
+function loadSavedState() {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object' || !Array.isArray(data.rows)) return null;
+    bumpRowIdCounter([
+      ...data.rows.map((r) => r.id),
+      ...(Array.isArray(data.rateRows) ? data.rateRows.map((r) => r.id) : []),
+    ]);
+    return data;
+  } catch {
+    return null;
+  }
 }
 
 const COMBO_DISPLAY_LIMIT = 3;
@@ -59,11 +81,14 @@ function reconcileForWindow(parsed, prev, w) {
 }
 
 export default function TripPlanner() {
-  const [notesText, setNotesText] = useState(DEFAULT_TRIP_NOTES);
-  const [rows, setRows] = useState(() => linesToRows(DEFAULT_TRIP_NOTES).rows);
-  const [notes, setNotes] = useState(() => linesToRows(DEFAULT_TRIP_NOTES).notes);
-  const [rateRows, setRateRows] = useState(() => ratesToRows(linesToRows(DEFAULT_TRIP_NOTES).rates));
-  const [selection, setSelection] = useState({ travel: {}, stay: {}, activity: {} });
+  // Read once on mount; restored fields fall back to the example trip
+  // individually so a partially-corrupt save still recovers gracefully.
+  const [saved] = useState(loadSavedState);
+  const [notesText, setNotesText] = useState(() => (saved && typeof saved.notesText === 'string') ? saved.notesText : DEFAULT_TRIP_NOTES);
+  const [rows, setRows] = useState(() => (saved && Array.isArray(saved.rows)) ? saved.rows : linesToRows(DEFAULT_TRIP_NOTES).rows);
+  const [notes, setNotes] = useState(() => (saved && Array.isArray(saved.notes)) ? saved.notes : linesToRows(DEFAULT_TRIP_NOTES).notes);
+  const [rateRows, setRateRows] = useState(() => (saved && Array.isArray(saved.rateRows)) ? saved.rateRows : ratesToRows(linesToRows(DEFAULT_TRIP_NOTES).rates));
+  const [selection, setSelection] = useState(() => (saved && saved.selection) || { travel: {}, stay: {}, activity: {} });
 
   const rates = useMemo(() => {
     const m = {};
@@ -84,7 +109,7 @@ export default function TripPlanner() {
   const [editPanelOpen, setEditPanelOpen] = useState(false);
   const effectiveEditOpen = editPanelOpen || rows.length === 0;
 
-  const [activeWindow, setActiveWindow] = useState(null);
+  const [activeWindow, setActiveWindow] = useState(() => (saved && typeof saved.activeWindow === 'string') ? saved.activeWindow : null);
   const distinctWindows = useMemo(() => distinctWindowsOf(parsed), [parsed]);
 
   // Keep existing picks where the selected row still exists and (re)default
@@ -103,6 +128,19 @@ export default function TripPlanner() {
     setActiveWindow(w);
     setSelection((prev) => reconcileForWindow(parsed, prev, w));
   }
+
+  // Auto-save the trip so a reload doesn't lose it. localStorage can throw
+  // (private browsing, quota, disabled) — degrade to in-memory-only rather
+  // than crash the app.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        version: 1, notesText, rows, notes, rateRows, selection, activeWindow,
+      }));
+    } catch {
+      // ignore — editing still works for the rest of this session
+    }
+  }, [notesText, rows, notes, rateRows, selection, activeWindow]);
 
   function convertNotesToTable() {
     const result = linesToRows(notesText);
@@ -434,6 +472,7 @@ export default function TripPlanner() {
                 {rows.map((row) => {
                   const gk = rowGroupKey(row);
                   const inputCls = 'w-full min-w-[7rem] font-mono text-xs px-1.5 py-1 rounded border border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none bg-transparent';
+                  const costUnrecognized = costTextIssue(row.costText);
                   return (
                     <tr key={row.id} className="border-t border-slate-100">
                       <td className="px-2 py-1.5">
@@ -505,11 +544,14 @@ export default function TripPlanner() {
                       <td className="px-2 py-1.5">
                         <input
                           type="text"
-                          className={inputCls}
+                          className={costUnrecognized ? `${inputCls} border-red-300 bg-red-50` : inputCls}
                           value={row.costText}
                           onChange={(e) => updateRow(row.id, 'costText', e.target.value)}
                           placeholder="€2100 or free"
+                          title={costUnrecognized ? "Not recognized as a cost — excluded from totals until fixed" : undefined}
+                          aria-invalid={costUnrecognized || undefined}
                         />
+                        {costUnrecognized && <span className="text-red-600 text-[0.65rem]" title="Not recognized as a cost — excluded from totals until fixed">⚠ not recognized</span>}
                       </td>
                       <td className="px-2 py-1.5">
                         <input

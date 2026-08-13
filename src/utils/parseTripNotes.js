@@ -36,6 +36,26 @@ export function parseCost(text) {
   return { low, high, perNight, nights, isFree: low === 0 && high === 0, raw: m[0], currency };
 }
 
+// True when a row's raw cost text couldn't be fully understood — either it
+// didn't parse as a cost at all, or something's left over after the parsed
+// amount. The second case matters more than it looks: a typo like
+// "EUR21OO" (letter O for zero) partially matches "EUR21" and silently
+// drops the "OO", so the row would still parse — just to the wrong number,
+// with nothing flagging it. Empty text isn't an issue — that's just no
+// cost entered yet, not a mistake.
+export function costTextIssue(costText) {
+  const t = (costText || '').trim();
+  if (!t) return false;
+  const cost = parseCost(t);
+  if (!cost) return true;
+  const idx = t.indexOf(cost.raw);
+  if (idx === -1) return true;
+  let rest = (t.slice(0, idx) + t.slice(idx + cost.raw.length)).trim();
+  if (!rest) return false;
+  rest = rest.replace(/^x\s?\d+\b/i, '').replace(/^for\s+\d+\s+nights?\b/i, '').replace(/^\d+\s+nights?\b/i, '').trim();
+  return rest.length > 0;
+}
+
 export function formatMoney(n, currency) {
   currency = currency || 'EUR';
   const sym = CURRENCY_SYMBOLS[currency];
@@ -264,6 +284,20 @@ export function parseNotes(text) {
 
 let nextRowId = 1;
 export function newRowId() { return `r${nextRowId++}`; }
+// Restoring persisted rows/rates re-introduces ids like "r7" while this
+// counter has reset to 1 on page load — without raising the floor here, the
+// next newRowId() call would collide with an existing restored id. Safe to
+// call repeatedly (e.g. under StrictMode's double-invoked lazy initializers)
+// since it only ever raises the counter, never lowers it.
+export function bumpRowIdCounter(ids) {
+  ids.forEach((id) => {
+    const m = /^r(\d+)$/.exec(id || '');
+    if (m) {
+      const n = parseInt(m[1], 10) + 1;
+      if (n > nextRowId) nextRowId = n;
+    }
+  });
+}
 export function newRow(category = 'travel') {
   return { id: newRowId(), category, group: '', option: '', timeText: '', costText: '', detail: '', window: '' };
 }

@@ -110,6 +110,15 @@ Use the slider to select 1–7 days in Milan. Total trip duration updates automa
 - Train travel: Choose based on infant sleep preferences
 - Book hotels near public transit for flexibility
 
+## 📸 Getting prices into the app
+
+Typing every fare by hand doesn't scale, so there are two capture tools alongside the CLI in `scripts/`:
+
+- **`scripts/extract-screenshot.mjs`** — point it at a screenshot of a flight/hotel search page (or a photo of a handwritten note) and it calls the Claude API to transcribe every priced option into `FLIGHT:`/`HOTEL:`/`ACTIVITY:` shorthand, ready to paste into the notes box or pipe into `generate-report.mjs`. Needs your own `ANTHROPIC_API_KEY`. See the script's header comment for usage.
+- **`extension/`** — a browser extension (Chrome/Edge/Firefox, load unpacked) that adds a right-click "Add to Trip Planner" on any selected text on any site. Review and edit captures in the popup, then copy them as trip-notes lines to paste into the app. See `extension/README.md`.
+
+Both output the same shorthand syntax the app already parses, so nothing downstream needs to know where a line came from.
+
 ## 🤝 Contributing
 
 Contributions welcome! Feel free to:

@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Trip Planner captures</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <h1>Trip Planner captures</h1>
+    <p class="hint">Select a price on any page, right-click, and choose <strong>“Add to Trip Planner”</strong>. Review the queue below, then copy it into your trip notes.</p>
+  </header>
+
+  <div id="empty-state" class="empty" hidden>
+    No captures yet. Select price text on a page, right-click, and pick <strong>“Add to Trip Planner”</strong>.
+  </div>
+
+  <ul id="capture-list"></ul>
+
+  <footer>
+    <div id="status" class="status" hidden></div>
+    <div class="actions">
+      <button id="clear-btn" class="btn -ghost">Clear all</button>
+      <button id="copy-btn" class="btn -primary">Copy as trip notes</button>
+    </div>
+  </footer>
+
+  <script src="lib/capture.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

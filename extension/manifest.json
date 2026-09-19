@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "TripAgent Capture",
+  "version": "0.1.0",
+  "description": "Capture flight, train and hotel options from booking sites and send them to your Trip Planner.",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": [
+    "http://localhost:3000/*",
+    "http://127.0.0.1:3000/*",
+    "https://bgra1123.github.io/trip_planner/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "TripAgent Capture"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.google.com/travel/flights*",
+        "https://www.google.*/travel/flights*",
+        "https://www.kayak.com/flights/*",
+        "https://www.kayak.*/flights/*",
+        "https://www.skyscanner.net/transport/flights/*",
+        "https://www.skyscanner.*/transport/flights/*",
+        "https://www.booking.com/searchresults*",
+        "https://www.booking.com/hotel/*",
+        "https://www.trainline.com/*",
+        "https://int.bahn.de/*",
+        "https://www.thetrainline.com/*"
+      ],
+      "js": ["scrapers.js", "content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "http://localhost:3000/*",
+        "http://127.0.0.1:3000/*",
+        "https://bgra1123.github.io/trip_planner/*"
+      ],
+      "js": ["bridge.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}

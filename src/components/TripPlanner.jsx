@@ -3,6 +3,7 @@ import {
   groupRows, linesToRows, newRow, costLabel, euro, sumRange, enumerateCombinations,
   buildExportData, toMarkdown, deriveRouteChain, DEFAULT_TRIP_NOTES,
 } from '../utils/parseTripNotes';
+import TripAgentPanel from './TripAgentPanel';
 
 const COMBO_DISPLAY_LIMIT = 3;
 const COMBO_CAP = 4000;
@@ -59,6 +60,13 @@ export default function TripPlanner() {
   }
   function addRow(category = 'travel') {
     setRows((rs) => [...rs, newRow(category)]);
+  }
+  // Captured offers arrive as ready-made rows (see utils/tripAgentOffers.js)
+  // and are appended, never merged over existing ones — the user's own
+  // edits are never overwritten by a scrape.
+  function appendRows(newRows) {
+    if (!newRows || !newRows.length) return;
+    setRows((rs) => [...rs, ...newRows]);
   }
   function deleteRow(id) {
     setRows((rs) => rs.filter((r) => r.id !== id));
@@ -218,6 +226,9 @@ export default function TripPlanner() {
               : `Tracking ${parsed.travel.length} travel leg(s), ${parsed.stay.length} stay(s), ${parsed.activities.length} activit${parsed.activities.length === 1 ? 'y' : 'ies'}.`}
           </p>
         </div>
+
+        {/* TripAgent capture (extension + backend) */}
+        <TripAgentPanel onAddRows={appendRows} />
 
         {/* Editable rows table */}
         <div className="bg-white rounded-lg shadow-sm border border-slate-200 mb-8 overflow-x-auto">

@@ -63,11 +63,27 @@ npm start
 trip_planner/
 ├── src/
 │   ├── components/
-│   │   └── TripPlanner.jsx      # Main component
+│   │   ├── TripPlanner.jsx       # Main component
+│   │   └── TripAgentPanel.jsx    # Staging panel for captured offers
+│   ├── hooks/
+│   │   └── useTripAgent.js       # Collects offers from extension + backend
+│   ├── utils/
+│   │   ├── parseTripNotes.js     # Notes parsing, cost model, export
+│   │   ├── tripAgentOffers.js    # Offer normalization → editable rows
+│   │   ├── tripAgentBridge.js    # Page half of the extension bridge
+│   │   └── tripAgentApi.js       # Backend client
 │   ├── App.jsx                   # App wrapper
 │   ├── App.css                   # Component styles
 │   ├── index.jsx                 # Entry point
 │   └── index.css                 # Global styles
+├── extension/                    # Chrome extension (MV3) — see its README
+├── backend/                      # Flight-search proxy — see its README
+├── scripts/
+│   ├── generate-report.mjs       # Notes → trip-plan.json/.md, no browser
+│   ├── tripagent-selftest.mjs    # Data-pipeline checks
+│   └── tripagent-browser-test.mjs# Bridge checks in a real browser
+├── docs/
+│   └── TRIPAGENT-INTEGRATION.md  # Architecture and data contract
 ├── public/
 │   └── index.html                # HTML template
 ├── package.json                  # Dependencies
@@ -75,6 +91,35 @@ trip_planner/
 ├── README.md                     # This file
 └── LICENSE                       # MIT License
 ```
+
+## 🔌 TripAgent Capture (optional)
+
+Stop retyping prices you already found in a browser tab.
+
+- **Chrome extension** (`extension/`) — scrapes flight, train and hotel
+  options from Google Flights, Kayak, Skyscanner, Booking.com and others,
+  and sends them to the planner. Load it unpacked from `chrome://extensions`.
+- **Backend proxy** (`backend/`) — `npm run backend` adds a flight search to
+  the app. It runs on sample data out of the box, and on live Amadeus prices
+  once you set `AMADEUS_CLIENT_ID` / `AMADEUS_CLIENT_SECRET`.
+
+Captured offers are **staged, not applied**: they appear in the *TripAgent
+capture* panel with their route, times and price, and only become rows in
+your plan when you click Add. A misread page costs you a glance, never a
+rewritten itinerary.
+
+Architecture and the data contract: [docs/TRIPAGENT-INTEGRATION.md](docs/TRIPAGENT-INTEGRATION.md).
+
+## 🧪 Scripts
+
+| Command | What it does |
+|---------|--------------|
+| `npm start` | Run the planner at http://localhost:3000 |
+| `npm run build` | Production build |
+| `npm run backend` | Run the flight-search proxy at http://localhost:8787 |
+| `npm run report -- notes.txt` | Generate `trip-plan.json` / `.md` without a browser |
+| `npm run tripagent:selftest` | Check the capture pipeline (no browser, no API key) |
+| `node scripts/tripagent-browser-test.mjs` | Check the extension bridge in a real browser (needs Playwright) |
 
 ## 🎮 How to Use
 
@@ -137,7 +182,8 @@ This project is licensed under the **MIT License** — see [LICENSE](LICENSE) fi
 - [ ] Add daily budget tracker
 - [ ] Support for multiple travelers
 - [ ] Hotel comparison across MXP vs BGY access
-- [ ] Booking integration (flights, trains, hotels)
+- [x] Flight capture from booking sites (extension) and a search proxy (backend)
+- [ ] Hotel search in the backend
 - [ ] Currency conversion
 - [ ] Weather forecast for travel dates
 
@@ -147,5 +193,5 @@ Questions or suggestions? Open an issue on GitHub or reach out!
 
 ---
 
-**Last Updated**: August 11, 2026  
-**Version**: 1.0.0
+**Last Updated**: September 19, 2026  
+**Version**: 1.1.0

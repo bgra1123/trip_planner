@@ -13,8 +13,9 @@
 import {
   normalizeTime, normalizePrice, normalizeOffer, normalizeOffers,
   offerToRow, offersToRows, offerCostText, rowCostIsParseable, mergeOffers,
+  offersFromNotesText, currenciesNeedingRate,
 } from '../src/utils/tripAgentOffers.js';
-import { groupRows, defaultSelection, buildExportData, parseCost } from '../src/utils/parseTripNotes.js';
+import { groupRows, defaultSelection, buildExportData, parseCost, convertToBase } from '../src/utils/parseTripNotes.js';
 import { toOffers, humanDuration } from '../backend/amadeus.mjs';
 import { sampleFlights } from '../backend/sample.mjs';
 import { validateFlightQuery } from '../backend/server.mjs';
@@ -92,12 +93,64 @@ const train = normalizeOffer({ kind: 'train', from: 'MUN', to: 'MILAN', price: {
 check('train range shorthand', offerCostText(train), '€250-350');
 check('train range parses back', [parseCost(offerCostText(train)).low, parseCost(offerCostText(train)).high], [250, 350]);
 
-// An unsupported currency must not be silently converted or dropped.
+// ---- currency ------------------------------------------------------------
+// A currency the planner knows is written faithfully, symbol and all. The
+// amount must never be quietly relabelled as euros.
 const lira = normalizeOffer({ kind: 'flight', from: 'IST', to: 'ESB', price: '45000 TRY' });
 const liraRow = offerToRow(lira, 'row-3');
-check('unsupported currency leaves the cost cell empty', liraRow.costText, '');
-ok('unsupported currency is preserved in the detail', liraRow.detail.includes('TRY 45000'), liraRow.detail);
-ok('unsupported currency is flagged as unparseable', !rowCostIsParseable(liraRow));
+check('a known non-euro currency keeps its own symbol', liraRow.costText, '₺45000');
+check('a lira cost parses back as lira', [parseCost(liraRow.costText).low, parseCost(liraRow.costText).currency], [45000, 'TRY']);
+ok('a lira cost is parseable', rowCostIsParseable(liraRow));
+
+// Regression: there is no word boundary between "Y" and "4" in "TRY45000",
+// so a \b-anchored code pattern silently dropped the currency and defaulted
+// the amount to euros.
+check('a code glued to its amount is still read', normalizePrice('TRY45000'), { low: 45000, high: 45000, currency: 'TRY' });
+check('a symbol glued to its amount is still read', normalizePrice('₺45000'), { low: 45000, high: 45000, currency: 'TRY' });
+check('CHF is recognized as a word marker', normalizePrice('CHF 250'), { low: 250, high: 250, currency: 'CHF' });
+
+// Regression: a nights multiplier is a quantity, not a price. "x3" used to be
+// scooped up as the low end of a range.
+check('a nights multiplier is not a price', normalizePrice('€140/night x3'), { low: 140, high: 140, currency: 'EUR' });
+check('a spelled-out nights count is not a price', normalizePrice('€90/night for 3 nights'), { low: 90, high: 90, currency: 'EUR' });
+
+// A currency outside the planner's vocabulary must not be converted or
+// dropped: the cost cell stays empty and the amount survives in the detail.
+const yen = normalizeOffer({ kind: 'flight', from: 'HND', to: 'IST', price: '145000 JPY' });
+const yenRow = offerToRow(yen, 'row-3b');
+check('an unknown currency leaves the cost cell empty', yenRow.costText, '');
+ok('an unknown currency is preserved in the detail', yenRow.detail.includes('JPY 145000'), yenRow.detail);
+ok('an unknown currency is flagged as unparseable', !rowCostIsParseable(yenRow));
+
+// Conversion is gated on a rate being on file — never a silent 1:1 guess.
+check('a foreign currency with no rate is reported', currenciesNeedingRate([lira], {}), ['TRY']);
+check('a foreign currency with a rate is not reported', currenciesNeedingRate([lira], { TRY: 0.01814 }), []);
+check('euro costs never need a rate', currenciesNeedingRate([flight], {}), []);
+ok('an unrated cost is excluded from the base total, not guessed',
+  convertToBase(parseCost('₺45000'), {}).missingRate === true);
+check('a rated cost converts', Math.round(convertToBase(parseCost('₺45000'), { TRY: 0.01814 }).low), 816);
+
+// ---- notes captures ------------------------------------------------------
+// A hand-reviewed text selection reaches staging as trip-notes lines, parsed
+// by the planner's own grammar rather than reimplemented in the extension.
+const captured = offersFromNotesText([
+  'RATE: TRY 0.01814',
+  'FLIGHT: IST to MUN, 6:45-11:30, TRY45000, Turkish Airlines',
+  'HOTEL: Milan - near Duomo, EUR140/night x3',
+  'ACTIVITY: Duomo rooftop, EUR40',
+].join('\n'));
+check('a RATE: line is carried out of the capture', captured.rates, { TRY: 0.01814 });
+check('every priced line becomes an offer', captured.offers.length, 3);
+check('the notes categories survive', captured.offers.map((o) => o.category), ['travel', 'stay', 'activity']);
+const capturedRows = captured.offers.map((o, i) => offerToRow(o, `cap-${i}`));
+check('a captured lira flight keeps its currency', capturedRows[0].costText, '₺45000');
+// Regression: parseCost expands a per-night price across the stay, so passing
+// its result straight back through offerCostText multiplied the nights twice
+// (140/night x3 -> 420 -> "€420/night x3" -> 1260).
+check('a per-night capture keeps its unit price', capturedRows[1].costText, '€140/night x3');
+check('and still totals to the whole stay', parseCost(capturedRows[1].costText).low, 420);
+check('a captured route becomes a leg', capturedRows[0].group, 'IST → MUN');
+check('the captured rate answers its own currency', currenciesNeedingRate(captured.offers, captured.rates), []);
 
 // ---- dedupe --------------------------------------------------------------
 const dupA = normalizeOffer({ kind: 'flight', from: 'IST', to: 'MUC', departure: '06:45', price: '€2100', carrier: 'TK' });
@@ -234,6 +287,32 @@ check('json-ld carrier', ldScraped[0].carrier, 'Turkish Airlines');
 const ldRow = offerToRow(normalizeOffer(ldScraped[0]), 'row-ld');
 check('json-ld row time', ldRow.timeText, '06:45-11:30');
 check('json-ld row cost', ldRow.costText, '\u20ac2100');
+
+// ---- full pipeline, in a second currency ---------------------------------
+// The whole point of the rate table: a captured lira fare has to reach the
+// planner's euro totals, converted, and its absence of a rate has to keep it
+// out rather than in at 1:1.
+const mixedRows = [
+  ...offersToRows(offersFromNotesText('FLIGHT: IST to MUN, 6:45-11:30, TRY45000').offers),
+  ...offersToRows(offersFromNotesText('HOTEL: Munich - central, EUR120/night x2').offers),
+];
+const withRate = buildExportData(
+  groupRows(mixedRows, [], { TRY: 0.01814 }),
+  defaultSelection(groupRows(mixedRows, [], { TRY: 0.01814 })),
+  null
+);
+check('a rated lira fare converts into the euro total', Math.round(withRate.costBreakdown.travel.low), 816);
+check('the euro stay is unaffected by conversion', withRate.costBreakdown.accommodation.low, 240);
+check('the grand total mixes both currencies correctly', Math.round(withRate.costBreakdown.total.low), 1056);
+
+const noRate = buildExportData(
+  groupRows(mixedRows, [], {}),
+  defaultSelection(groupRows(mixedRows, [], {})),
+  null
+);
+check('an unrated lira fare is excluded from the total, not guessed at 1:1',
+  noRate.costBreakdown.travel.low, 0);
+check('and the rest of the trip still totals', noRate.costBreakdown.accommodation.low, 240);
 
 // ---- report --------------------------------------------------------------
 if (failures.length) {

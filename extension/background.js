@@ -1,14 +1,24 @@
-/* global chrome */
-// Service worker: the extension's staging area.
+/* global chrome, importScripts, TripCapture */
+// Service worker: the extension's staging area for both capture paths.
 //
-// Captured offers are held here (not pushed straight into the planner)
-// because the planner tab may not be open yet, and because the user should
-// decide what enters their plan. MV3 service workers are killed between
-// events, so nothing lives in memory — state is chrome.storage.
+//   selection captures — text the user right-clicked on any page. Free-form,
+//                        reviewed and corrected in the popup, handed over as
+//                        trip-notes lines.
+//   scraped offers     — structured rows lifted from a supported booking or
+//                        bank travel portal by content.js.
+//
+// Both are staged here rather than pushed straight into the plan: the
+// planner tab may not even be open, and the user should decide what enters
+// their itinerary. MV3 service workers are killed between events, so nothing
+// lives in memory — state is chrome.storage.
 
-const STORE_KEY = 'tripagent.offers';
+importScripts('lib/capture.js');
+
+const OFFERS_KEY = 'tripagent.offers';
+const CAPTURES_KEY = 'captures';
 const OPTIONS_KEY = 'tripagent.options';
 const MAX_OFFERS = 200;
+const MENU_ID = 'trip-planner-capture';
 
 const PLANNER_URLS = [
   'http://localhost:3000/*',
@@ -16,20 +26,32 @@ const PLANNER_URLS = [
   'https://bgra1123.github.io/trip_planner/*',
 ];
 
-// chrome.storage.session keeps captures out of the profile on disk, but is
-// cleared on browser restart; fall back to local where it is unavailable.
-function area() {
+// Scraped offers go in session storage: they are bulky, reproducible by
+// re-scraping, and not worth writing to the profile on disk. Selection
+// captures are hand-corrected work, so they live in local storage and
+// survive a browser restart.
+function offerArea() {
   return chrome.storage.session || chrome.storage.local;
 }
 
 async function readOffers() {
-  const store = await area().get(STORE_KEY);
-  return Array.isArray(store[STORE_KEY]) ? store[STORE_KEY] : [];
+  const store = await offerArea().get(OFFERS_KEY);
+  return Array.isArray(store[OFFERS_KEY]) ? store[OFFERS_KEY] : [];
+}
+
+async function readCaptures() {
+  const store = await chrome.storage.local.get(CAPTURES_KEY);
+  return Array.isArray(store[CAPTURES_KEY]) ? store[CAPTURES_KEY] : [];
 }
 
 async function writeOffers(offers) {
-  await area().set({ [STORE_KEY]: offers.slice(0, MAX_OFFERS) });
-  updateBadge(offers.length);
+  await offerArea().set({ [OFFERS_KEY]: offers.slice(0, MAX_OFFERS) });
+  await refreshBadge();
+}
+
+async function writeCaptures(captures) {
+  await chrome.storage.local.set({ [CAPTURES_KEY]: captures });
+  await refreshBadge();
 }
 
 async function readOptions() {
@@ -37,9 +59,12 @@ async function readOptions() {
   return store[OPTIONS_KEY] || { from: '', to: '', window: '' };
 }
 
-function updateBadge(count) {
-  const text = count > 0 ? String(Math.min(count, 999)) : '';
-  chrome.action.setBadgeText({ text }).catch(() => {});
+// One badge for both queues — the user cares how much is waiting, not which
+// mechanism produced it.
+async function refreshBadge() {
+  const [offers, captures] = await Promise.all([readOffers(), readCaptures()]);
+  const count = offers.length + captures.length;
+  chrome.action.setBadgeText({ text: count ? String(Math.min(count, 999)) : '' }).catch(() => {});
   chrome.action.setBadgeBackgroundColor({ color: '#2563eb' }).catch(() => {});
 }
 
@@ -78,15 +103,14 @@ async function plannerTabs() {
   }
 }
 
-// Push into every open planner tab. Tabs that have no bridge yet (still
-// loading) simply reject the message; the page asks again on READY.
-async function pushToPlanner(offers) {
-  if (!offers.length) return 0;
+// Push into every open planner tab. Tabs with no bridge yet (still loading)
+// simply reject the message; the page asks again on READY.
+async function pushToPlanner(message) {
   const tabs = await plannerTabs();
   let delivered = 0;
   await Promise.all(tabs.map(async (tab) => {
     try {
-      await chrome.tabs.sendMessage(tab.id, { type: 'PUSH_OFFERS', offers });
+      await chrome.tabs.sendMessage(tab.id, message);
       delivered += 1;
     } catch (err) { /* no bridge in that tab yet */ }
   }));
@@ -97,6 +121,34 @@ function version() {
   return chrome.runtime.getManifest().version;
 }
 
+// ---- selection captures (context menu) -----------------------------------
+
+chrome.runtime.onInstalled.addListener(async () => {
+  chrome.contextMenus.create({
+    id: MENU_ID,
+    title: 'Add “%s” to Trip Planner',
+    contexts: ['selection'],
+  }, () => { void chrome.runtime.lastError; });
+  await refreshBadge();
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId !== MENU_ID || !info.selectionText) return;
+  const text = TripCapture.cleanText(info.selectionText);
+  const captures = await readCaptures();
+  captures.push({
+    id: `c${Date.now()}${Math.floor(Math.random() * 1000)}`,
+    text,
+    category: TripCapture.guessCategory(text, tab && tab.title, tab && tab.url),
+    sourceTitle: tab ? tab.title : '',
+    sourceUrl: tab ? tab.url : '',
+    createdAt: new Date().toISOString(),
+  });
+  await writeCaptures(captures);
+});
+
+// ---- message router ------------------------------------------------------
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || !message.type) return undefined;
 
@@ -104,13 +156,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.type) {
       case 'CAPTURED': {
         const result = await addOffers(message.offers || []);
-        if (result.added) await pushToPlanner(message.offers);
+        if (result.added) await pushToPlanner({ type: 'PUSH_OFFERS', offers: message.offers });
         sendResponse({ ok: true, ...result });
         break;
       }
       case 'PAGE_READY': {
-        const offers = await readOffers();
-        sendResponse({ ok: true, version: version(), offers });
+        sendResponse({ ok: true, version: version(), offers: await readOffers() });
         break;
       }
       case 'PAGE_REQUEST_OFFERS': {
@@ -118,14 +169,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
       }
       case 'PAGE_CLEAR_OFFERS':
-      case 'CLEAR': {
+      case 'CLEAR_OFFERS': {
         await writeOffers([]);
         sendResponse({ ok: true, offers: [] });
         break;
       }
+      case 'CLEAR_CAPTURES': {
+        await writeCaptures([]);
+        sendResponse({ ok: true });
+        break;
+      }
+      case 'SET_CAPTURES': {
+        await writeCaptures(Array.isArray(message.captures) ? message.captures : []);
+        sendResponse({ ok: true });
+        break;
+      }
       case 'GET_STATE': {
-        const [offers, options, tabs] = await Promise.all([readOffers(), readOptions(), plannerTabs()]);
-        sendResponse({ ok: true, version: version(), offers, options, plannerTabs: tabs.length });
+        const [offers, captures, options, tabs] = await Promise.all([
+          readOffers(), readCaptures(), readOptions(), plannerTabs(),
+        ]);
+        sendResponse({ ok: true, version: version(), offers, captures, options, plannerTabs: tabs.length });
         break;
       }
       case 'SET_OPTIONS': {
@@ -140,19 +203,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         try {
           reply = await chrome.tabs.sendMessage(tab.id, { type: 'SCRAPE_NOW', overrides: message.overrides || {} });
         } catch (err) {
-          sendResponse({ ok: false, error: 'This page has no TripAgent scraper — open a supported booking site.' });
+          sendResponse({ ok: false, error: 'This page has no TripAgent scraper. Right-click a price to capture it by hand instead.' });
           break;
         }
         const offers = (reply && reply.offers) || [];
         const result = await addOffers(offers);
-        if (result.added) await pushToPlanner(offers);
+        if (result.added) await pushToPlanner({ type: 'PUSH_OFFERS', offers });
         sendResponse({ ok: true, captured: offers.length, ...result });
         break;
       }
-      case 'SEND_TO_PLANNER': {
+      case 'SEND_OFFERS_TO_PLANNER': {
         const offers = await readOffers();
-        const delivered = await pushToPlanner(offers);
-        sendResponse({ ok: true, delivered, count: offers.length });
+        if (!offers.length) { sendResponse({ ok: true, delivered: 0, count: 0 }); break; }
+        sendResponse({ ok: true, delivered: await pushToPlanner({ type: 'PUSH_OFFERS', offers }), count: offers.length });
+        break;
+      }
+      // Selection captures reach the planner as trip-notes lines, which the
+      // page parses with its own linesToRows() — the extension never has to
+      // reimplement the notes grammar.
+      case 'SEND_NOTES_TO_PLANNER': {
+        const notes = String(message.notes || '');
+        if (!notes.trim()) { sendResponse({ ok: true, delivered: 0 }); break; }
+        sendResponse({ ok: true, delivered: await pushToPlanner({ type: 'PUSH_NOTES', notes }) });
         break;
       }
       default:
@@ -163,6 +235,4 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true; // keep the channel open for the async reply
 });
 
-chrome.runtime.onInstalled.addListener(async () => {
-  updateBadge((await readOffers()).length);
-});
+refreshBadge();

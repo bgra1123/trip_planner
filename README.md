@@ -10,6 +10,8 @@ An interactive React-based trip planning tool that optimizes your Europe itinera
 - **Flexible Stay Duration**: Drag slider to adjust Milan stay (1–7 days)
 - **Family-Friendly Recommendations**: Optimized for travel with infant
 - **Cost Breakdown**: Real-time cost estimation for flights and train
+- **Multi-Currency**: Mix EUR, USD, GBP, TRY and CHF; set `RATE:` lines to fold them into one total
+- **Price Capture**: Right-click any price, scrape supported portals, or search flights via the backend
 - **Responsive Design**: Works seamlessly on mobile (iOS), tablet, and desktop
 
 ## 📋 Route Overview
@@ -76,10 +78,13 @@ trip_planner/
 │   ├── App.css                   # Component styles
 │   ├── index.jsx                 # Entry point
 │   └── index.css                 # Global styles
-├── extension/                    # Chrome extension (MV3) — see its README
+├── extension/                    # Browser extension (MV3) — see its README
+│   ├── lib/capture.js            # Notes-line formatting, shared by worker + popup
+│   └── scrapers.js               # Site adapters, JSON-LD + text heuristics
 ├── backend/                      # Flight-search proxy — see its README
 ├── scripts/
 │   ├── generate-report.mjs       # Notes → trip-plan.json/.md, no browser
+│   ├── extract-screenshot.mjs    # Screenshot → trip notes, via the Claude API
 │   ├── tripagent-selftest.mjs    # Data-pipeline checks
 │   └── tripagent-browser-test.mjs# Bridge checks in a real browser
 ├── docs/
@@ -92,21 +97,28 @@ trip_planner/
 └── LICENSE                       # MIT License
 ```
 
-## 🔌 TripAgent Capture (optional)
+## 🔌 Getting prices into the app
 
-Stop retyping prices you already found in a browser tab.
+Typing every fare by hand doesn't scale, so there are four ways in — no single
+one covers every site, which is exactly why there are several.
 
-- **Chrome extension** (`extension/`) — scrapes flight, train and hotel
-  options from Google Flights, Kayak, Skyscanner, Booking.com and others,
-  and sends them to the planner. Load it unpacked from `chrome://extensions`.
-- **Backend proxy** (`backend/`) — `npm run backend` adds a flight search to
-  the app. It runs on sample data out of the box, and on live Amadeus prices
-  once you set `AMADEUS_CLIENT_ID` / `AMADEUS_CLIENT_SECRET`.
+| Tool | Works on | Effort | Breaks when |
+|------|----------|--------|-------------|
+| **Right-click capture** (`extension/`) | any page, anywhere | select a price, right-click | never |
+| **Automatic scraping** (`extension/`) | supported booking + bank travel portals | none | a site redesigns |
+| **Backend flight search** (`backend/`) | Amadeus, via `npm run backend` | fill a form | an API key expires |
+| **Screenshot transcription** (`scripts/extract-screenshot.mjs`) | a screenshot or a photo of handwritten notes | run the CLI | needs `ANTHROPIC_API_KEY` |
 
-Captured offers are **staged, not applied**: they appear in the *TripAgent
-capture* panel with their route, times and price, and only become rows in
-your plan when you click Add. A misread page costs you a glance, never a
-rewritten itinerary.
+Everything converges on the same trip-notes shorthand and the same editable
+rows, so nothing downstream needs to know where a line came from.
+
+Captures are **staged, not applied**: they appear in the *TripAgent capture*
+panel with route, times and price, and become rows in your plan only when you
+click Add. A misread page costs you a glance, never a rewritten itinerary.
+
+Prices in a non-euro currency are captured faithfully (`₺45000` stays lira) but
+stay out of your totals until you give them a rate — add a
+`RATE: TRY 0.0181` line under *Edit trip data*. The planner never guesses 1:1.
 
 Architecture and the data contract: [docs/TRIPAGENT-INTEGRATION.md](docs/TRIPAGENT-INTEGRATION.md).
 
@@ -120,6 +132,7 @@ Architecture and the data contract: [docs/TRIPAGENT-INTEGRATION.md](docs/TRIPAGE
 | `npm run report -- notes.txt` | Generate `trip-plan.json` / `.md` without a browser |
 | `npm run tripagent:selftest` | Check the capture pipeline (no browser, no API key) |
 | `node scripts/tripagent-browser-test.mjs` | Check the extension bridge in a real browser (needs Playwright) |
+| `node scripts/extract-screenshot.mjs <image>` | Transcribe a screenshot of search results into trip notes (needs `ANTHROPIC_API_KEY`) |
 
 ## 🎮 How to Use
 
@@ -184,7 +197,7 @@ This project is licensed under the **MIT License** — see [LICENSE](LICENSE) fi
 - [ ] Hotel comparison across MXP vs BGY access
 - [x] Flight capture from booking sites (extension) and a search proxy (backend)
 - [ ] Hotel search in the backend
-- [ ] Currency conversion
+- [x] Currency conversion (`RATE:` lines, EUR base)
 - [ ] Weather forecast for travel dates
 
 ## 📧 Support

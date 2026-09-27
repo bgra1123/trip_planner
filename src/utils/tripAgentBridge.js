@@ -12,7 +12,7 @@
 // protocol tag, and every payload still goes through normalizeOffers()
 // before it can become a row.
 
-import { MSG_FROM_EXTENSION, MSG_FROM_PAGE, OFFER_PROTOCOL, normalizeOffers } from './tripAgentOffers.js';
+import { MSG_FROM_EXTENSION, MSG_FROM_PAGE, OFFER_PROTOCOL, normalizeOffers, offersFromNotesText } from './tripAgentOffers.js';
 
 export function isExtensionEnvelope(event) {
   if (!event || event.source !== window) return false;
@@ -32,6 +32,11 @@ export function postToExtension(type, payload = {}) {
 
 // Subscribe to extension traffic. `handlers` takes {onOffers, onStatus}.
 // Returns an unsubscribe function.
+//
+// Two payload shapes arrive, matching the extension's two capture paths:
+// OFFERS (structured rows a scraper lifted from a page) and NOTES (trip-notes
+// lines from a text selection the user reviewed by hand). NOTES is parsed here
+// with the planner's own grammar, so the extension never has to know it.
 export function listenForExtension(handlers = {}) {
   if (typeof window === 'undefined') return () => {};
   const onMessage = (event) => {
@@ -43,6 +48,12 @@ export function listenForExtension(handlers = {}) {
         sourceUrl: data.sourceUrl || '',
       });
       if (offers.length) handlers.onOffers(offers, data);
+    } else if (data.type === 'NOTES' && handlers.onOffers) {
+      const { offers, rates } = offersFromNotesText(data.notes, {
+        source: data.captureSource || 'selection',
+        sourceUrl: data.sourceUrl || '',
+      });
+      if (offers.length) handlers.onOffers(offers, { ...data, rates });
     } else if (data.type === 'STATUS' && handlers.onStatus) {
       handlers.onStatus({
         connected: true,

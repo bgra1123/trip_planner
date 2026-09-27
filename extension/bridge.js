@@ -52,10 +52,16 @@
     }
   });
 
-  // Extension -> page: the service worker pushes newly captured offers into
-  // any open planner tab without the page having to poll.
+  // Extension -> page: the service worker pushes captures into any open
+  // planner tab without the page having to poll. Two shapes, because the two
+  // capture paths produce genuinely different things: structured offers from
+  // a scraper, and trip-notes lines from a hand-reviewed text selection. The
+  // page parses the latter with its own notes grammar.
   chrome.runtime.onMessage.addListener(function (message) {
     if (!message) return;
     if (message.type === 'PUSH_OFFERS') sendOffers(message);
+    else if (message.type === 'PUSH_NOTES' && message.notes) {
+      toPage('NOTES', { notes: message.notes, captureSource: 'selection' });
+    }
   });
 })();

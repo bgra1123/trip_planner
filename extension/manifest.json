@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "TripAgent Capture",
-  "version": "0.1.0",
-  "description": "Capture flight, train and hotel options from booking sites and send them to your Trip Planner.",
-  "permissions": ["storage", "tabs"],
+  "version": "0.2.0",
+  "description": "Capture flight, train and hotel prices from any travel site — by right-clicking a price, or automatically on supported booking and bank travel portals — and send them to your Trip Planner.",
+  "permissions": ["contextMenus", "storage", "tabs"],
   "host_permissions": [
     "http://localhost:3000/*",
     "http://127.0.0.1:3000/*",
@@ -29,7 +29,9 @@
         "https://www.booking.com/hotel/*",
         "https://www.trainline.com/*",
         "https://int.bahn.de/*",
-        "https://www.thetrainline.com/*"
+        "https://www.thetrainline.com/*",
+        "https://travel.capitalone.com/*",
+        "https://travel.americanexpress.com/*"
       ],
       "js": ["scrapers.js", "content.js"],
       "run_at": "document_idle",

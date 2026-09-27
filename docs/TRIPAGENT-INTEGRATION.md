@@ -3,6 +3,27 @@
 How the browser extension, the web app and the backend fit together, and
 what the contract between them is.
 
+## Two capture paths
+
+There is no single mechanism that gets a price out of every travel site, so
+the extension carries two and the app treats them identically:
+
+| | Selected prices | Scraped offers |
+|---|---|---|
+| Works on | any page, anywhere | supported booking + bank travel portals |
+| User does | select a price, right-click | nothing, or *Capture this page* |
+| Produces | a trip-notes line, reviewed by hand | structured route/time/price rows |
+| Breaks when | never | a site redesigns its markup |
+
+The first always works and costs a moment of attention. The second costs
+nothing and sometimes stops working. Keeping both means a redesign costs
+convenience, not the ability to capture at all.
+
+Selected prices travel as **trip-notes text**, not structured data, and the
+page parses them with the planner's own `linesToRows()`. The extension
+therefore never reimplements the notes grammar — and a `RATE:` line a user
+selects comes along with the prices it applies to.
+
 ## Why it is shaped this way
 
 The planner's value is its cost model: options grouped per leg, ranked
@@ -18,12 +39,14 @@ costs you a glance, not a rewritten itinerary.
 
 ```
 ┌──────────────────────┐         ┌──────────────────────┐
-│  Booking site tab    │         │  TripAgent extension │
-│  kayak, booking.com, │         │                      │
-│  skyscanner, …       │         │  scrapers.js         │
-│                      │◀────────│  content.js          │
-│  DOM                 │ scrape  │      │               │
-└──────────────────────┘         │      ▼ runtime msg   │
+│  Any page            │  select │  TripAgent extension │
+│  (right-click a      │────────▶│  contextMenus        │
+│   price)             │         │      │               │
+├──────────────────────┤         │      ▼               │
+│  Booking site tab    │         │  scrapers.js         │
+│  kayak, booking.com, │◀────────│  content.js          │
+│  capitalone, amex, … │ scrape  │      │               │
+│  DOM                 │         │      ▼ runtime msg   │
                                  │  background.js       │
                                  │  (staging store)     │
                                  │      │               │
@@ -92,14 +115,35 @@ takes part in combinations, totals and export unchanged.
 ### The one seam that matters
 
 The planner reads cost from a row's **text** (`parseCost` in
-`parseTripNotes.js`), which understands `€2100`, `€250-350`, `€140/night x3`
-and `free`. So `offerCostText()` must emit something that parses back
-identically, and it only does that for EUR, USD and GBP.
+`parseTripNotes.js`), which understands `€2100`, `€250-350`, `€140/night x3`,
+`₺45000` and `free`. So `offerCostText()` must emit something that parses back
+identically. It draws on the planner's own `CURRENCY_SYMBOLS` rather than a
+private list, so a currency added there is understood here immediately.
 
-For any other currency the cost cell is left **empty** and the captured
-amount is written into the row's detail as `price TRY 45000 (enter
-manually)`. A wrong number in a total is worse than a missing one, and the
-panel flags these rows before you add them.
+Two distinct questions get confused easily:
+
+- **Can the cost be written?** Yes for every currency in `CURRENCY_SYMBOLS`
+  (EUR, USD, GBP, TRY, CHF). For anything else the cost cell is left **empty**
+  and the amount is preserved in the row's detail as
+  `price JPY 145000 (enter manually)` — a missing number beats a wrong one.
+- **Can the cost be totalled?** Only in the base currency (EUR) or with a
+  `RATE: <CODE> <eur-per-unit>` line on file. Without one, `convertToBase()`
+  returns `missingRate: true` and the planner *excludes* the cost from sums
+  rather than guessing 1:1. The capture panel names the currencies that still
+  need a rate, since only the user can supply it.
+
+Three bugs in this area were caught by the self-test and are now pinned by
+regression assertions, because all three produced plausible-looking wrong
+numbers rather than errors:
+
+- `normalizeTime` missed ISO timestamps — no `\b` between a date's `T` and the
+  hour, so every JSON-LD capture landed with empty times.
+- `normalizePrice` missed a currency code glued to its amount (`TRY45000`) for
+  the same reason — no `\b` between `Y` and `4` — and silently relabelled the
+  fare as euros.
+- A per-night price round-tripped through `parseCost` (which expands it across
+  the stay) and back out multiplied the nights **twice**: `€140/night x3` → 420
+  → `€420/night x3` → 1260.
 
 ## Message protocol
 
@@ -112,7 +156,8 @@ a third-party script cannot inject offers.
 
 | `type`   | payload                                | meaning                          |
 |----------|----------------------------------------|----------------------------------|
-| `OFFERS` | `offers[]`, `captureSource`, `sourceUrl` | newly captured or replayed offers |
+| `OFFERS` | `offers[]`, `captureSource`, `sourceUrl` | structured offers from a scraper |
+| `NOTES`  | `notes` (text), `captureSource`         | trip-notes lines from a reviewed text selection |
 | `STATUS` | `version`, `capturedCount`             | reply to the page's `READY`      |
 
 **Page → extension** (`source: 'tripagent-page'`):
@@ -180,9 +225,10 @@ checks, and that staging never writes to the plan by itself.
 - **Round trips are priced once.** Amadeus quotes one price per offer, so it
   is attributed to the outbound leg and the return is marked
   `return (priced with outbound)`. Pricing both would double the total.
-- **No persistence.** Captured offers live in the extension's session store
-  and the panel's React state. Closing the tab loses staging; the plan table
-  is what you export.
+- **Staging is not persistent.** Scraped offers live in the extension's
+  *session* store and the panel's React state, so a browser restart drops
+  them. Selected prices live in *local* storage and survive, because they are
+  hand-corrected work. The plan itself is saved across reloads.
 
 ## Next steps
 
@@ -193,5 +239,5 @@ Not built, in rough order of usefulness:
 2. Saved trips — the export in `buildExportData()` is already a complete
    snapshot, so persistence is a storage decision, not a modelling one.
 3. Per-site scraper adapters where the heuristic proves too loose.
-4. Currency conversion, which would let non-EUR/USD/GBP captures total
-   automatically instead of being flagged for manual entry.
+4. Live exchange rates, so `RATE:` lines don't have to be typed by hand.
+   Conversion itself is done — only the rate source is manual.

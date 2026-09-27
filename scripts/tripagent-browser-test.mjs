@@ -63,6 +63,10 @@ try {
 record('page announces READY to the extension on mount',
   (await page.evaluate(() => window.__tripagentSent)).includes('READY'));
 
+// The capture panel must be usable without opening the data-entry tools.
+const editCollapsed = await page.getByRole('button', { name: /Edit trip data/ }).count();
+record('the capture panel is reachable with the edit panel collapsed', editCollapsed > 0);
+
 await page.getByRole('button', { name: /TripAgent capture/i }).click();
 
 const addAll = () => page.getByRole('button', { name: /Add all \d+ to table/ });
@@ -93,6 +97,20 @@ record('both offers are staged', /Add all 2 to table/.test(await addAllLabel()),
 await postOffers([FLIGHT], { captureSource: 'kayak' });
 record('a re-capture does not duplicate', /Add all 2 to table/.test(await addAllLabel()), await addAllLabel());
 
+// The second capture path: trip-notes lines from a reviewed text selection.
+await page.evaluate(() => {
+  window.postMessage({
+    source: 'tripagent-extension', protocol: 'tripagent/v1', type: 'NOTES',
+    captureSource: 'selection',
+    notes: 'RATE: TRY 0.01814\nFLIGHT: SAW to VIE, 08:00-10:15, TRY38000, Pegasus',
+  }, window.location.origin);
+});
+await page.waitForTimeout(400);
+const afterNotes = await addAllLabel();
+record('a NOTES envelope is parsed and staged', /Add all 3 to table/.test(afterNotes), afterNotes);
+const notesBody = await page.locator('body').innerText();
+record('a captured lira fare keeps its currency', /\u20ba38000|₺38000/.test(notesBody));
+
 // Envelopes that fail any part of the contract must be dropped silently.
 await page.evaluate(() => {
   const origin = window.location.origin;
@@ -102,7 +120,7 @@ await page.evaluate(() => {
 });
 await page.waitForTimeout(350);
 record('malformed, wrong-protocol and wrong-source envelopes are ignored',
-  /Add all 2 to table/.test(await addAllLabel()), await addAllLabel());
+  /Add all 3 to table/.test(await addAllLabel()), await addAllLabel());
 
 // A frame on another origin must not be able to inject offers.
 await page.evaluate((url) => {
@@ -121,8 +139,17 @@ await page.waitForTimeout(400);
 
 const beforeAdd = await page.locator('body').innerText();
 record('a cross-origin frame cannot inject offers',
-  /Add all 2 to table/.test(await addAllLabel()) && !/EVL/.test(beforeAdd), await addAllLabel());
+  /Add all 3 to table/.test(await addAllLabel()) && !/EVL/.test(beforeAdd), await addAllLabel());
 
+// The editable plan table lives inside the collapsible "Edit trip data"
+// panel, so it has to be opened before the rows can be counted. The capture
+// panel deliberately sits outside it — an offer can arrive while this is shut.
+const editToggle = page.getByRole('button', { name: /Edit trip data|Hide trip data/ });
+if (await editToggle.count()) {
+  const label = await editToggle.innerText();
+  if (/Edit trip data/.test(label)) await editToggle.click();
+  await page.waitForTimeout(300);
+}
 const planTable = page.locator('table').filter({ has: page.locator('th', { hasText: 'Group / Leg' }) });
 const rowsBefore = await planTable.locator('tbody tr').count();
 record('staged offers do not reach the plan on their own',
@@ -133,7 +160,7 @@ await page.waitForTimeout(400);
 const rowsAfter = await planTable.locator('tbody tr').count();
 const afterAdd = await page.locator('body').innerText();
 
-record('adding grows the plan table by two rows', rowsAfter === rowsBefore + 2, `${rowsBefore} -> ${rowsAfter}`);
+record('adding grows the plan table by three rows', rowsAfter === rowsBefore + 3, `${rowsBefore} -> ${rowsAfter}`);
 record('the captured flight lands in the table', /Turkish Airlines/.test(afterAdd));
 record('the window tag survives into the table', /14-19 Aug/.test(afterAdd));
 record('the staging list empties once added', !/Add all \d+ to table/.test(afterAdd));

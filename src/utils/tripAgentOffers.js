@@ -11,15 +11,36 @@
 // Shared by the React app and the Node scripts, so it stays dependency-free
 // ESM with explicit .js import specifiers.
 
-import { newRowId, parseCost } from './parseTripNotes.js';
+import { newRowId, parseCost, costTextIssue, linesToRows, parseTimes, CURRENCY_SYMBOLS } from './parseTripNotes.js';
 
 export const OFFER_PROTOCOL = 'tripagent/v1';
 export const MSG_FROM_EXTENSION = 'tripagent-extension';
 export const MSG_FROM_PAGE = 'tripagent-page';
 
-// parseCost() only recognizes these currencies. Anything else is preserved
-// verbatim in the row's detail instead of being silently mangled into euros.
-const CURRENCY_SYMBOL = { EUR: '€', USD: '$', GBP: '£' };
+// The planner's own currency vocabulary — imported rather than duplicated, so
+// a currency added there is understood here immediately. A cost in a currency
+// it does not know is preserved verbatim in the row's detail instead of being
+// silently mangled into euros.
+//
+// This only decides whether a cost can be *written*. Whether it can be
+// *totalled* is a separate question, answered by a `RATE: <CODE> <factor>`
+// line in the notes; without one the planner excludes the cost from sums
+// rather than guessing 1:1.
+const CURRENCY_SYMBOL = CURRENCY_SYMBOLS;
+
+// Reverse of CURRENCY_SYMBOLS ('₺' -> 'TRY'), built from the same table so
+// scraped text is read with exactly the vocabulary the planner writes.
+const CODE_FOR_SYMBOL = Object.keys(CURRENCY_SYMBOLS).reduce((acc, code) => {
+  acc[CURRENCY_SYMBOLS[code]] = code;
+  return acc;
+}, {});
+
+// Character class of the single-character symbols only: multi-character
+// markers like "CHF" are matched by the ISO-code pattern instead.
+const SYMBOL_RE = new RegExp('['
+  + Object.keys(CODE_FOR_SYMBOL).filter((sym) => sym.length === 1)
+      .map((sym) => sym.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')).join('')
+  + ']');
 
 const KINDS = { flight: 'travel', train: 'travel', bus: 'travel', ferry: 'travel', car: 'travel', hotel: 'stay', stay: 'stay', activity: 'activity' };
 
@@ -65,12 +86,22 @@ export function normalizePrice(value) {
     return { low: Math.min(lo, hi), high: Math.max(lo, hi), currency };
   }
   const text = String(value);
-  const codeMatch = text.match(/\b(EUR|USD|GBP|TRY|CHF|SEK|NOK|DKK|PLN|CZK|JPY|CAD|AUD)\b/i);
-  const symbolMatch = text.match(/[€$£]/);
+  // The trailing boundary is a lookahead for a digit *or* a boundary: in
+  // "TRY45000" there is no \b between "Y" and "4", so requiring \b here
+  // dropped the currency and silently defaulted the amount to euros.
+  const codeMatch = text.match(/\b(EUR|USD|GBP|TRY|CHF|SEK|NOK|DKK|PLN|CZK|JPY|CAD|AUD)(?=\d|\b)/i);
+  const symbolMatch = text.match(SYMBOL_RE);
   const currency = codeMatch
     ? codeMatch[1].toUpperCase()
     : (symbolMatch ? symbolFromChar(symbolMatch[0]) : 'EUR');
-  const numbers = text.match(/\d+(?:[.,]\d+)*/g);
+  // Strip nights multipliers first: "x3", "for 3 nights", "3 nights". They
+  // are quantities, not prices, and would otherwise be scooped up as the low
+  // end of a range ("€140/night x3" reading as 3–140).
+  const amountText = text
+    .replace(/\bx\s?\d+\b/i, ' ')
+    .replace(/\bfor\s+\d+\s+nights?\b/i, ' ')
+    .replace(/\b\d+\s+nights?\b/i, ' ');
+  const numbers = amountText.match(/\d+(?:[.,]\d+)*/g);
   if (!numbers || !numbers.length) return null;
   const parsed = numbers.map(toNumber).filter((n) => n !== null);
   if (!parsed.length) return null;
@@ -78,9 +109,7 @@ export function normalizePrice(value) {
 }
 
 function symbolFromChar(ch) {
-  if (ch === '$') return 'USD';
-  if (ch === '£') return 'GBP';
-  return 'EUR';
+  return CODE_FOR_SYMBOL[ch] || 'EUR';
 }
 
 function normalizeCurrency(value) {
@@ -272,11 +301,71 @@ export function offerPreviewRow(offer) {
   return offerToRow(offer, `preview-${offer.id}`);
 }
 
-// True when the row's cost survives a parseCost() round-trip — the panel
-// uses this to warn before an offer is added as a row with no usable price.
+// True when the row's cost is both present and fully understood. This defers
+// to the planner's own costTextIssue(), which is stricter than parseCost
+// alone: it also rejects text that only *partly* parsed, like the typo
+// "EUR21OO" (letter O for zero) that would otherwise read as 21.
 export function rowCostIsParseable(row) {
   if (!row.costText) return false;
-  return !!parseCost(row.costText);
+  return !costTextIssue(row.costText);
+}
+
+// Currencies used by these offers that have no conversion rate on file, so
+// the planner would exclude them from its totals. The panel surfaces this
+// before the rows are added, since the fix is a `RATE: <CODE> <factor>` line
+// the user has to supply — not something a scraper can invent.
+export function currenciesNeedingRate(offers, rates = {}, base = 'EUR') {
+  const missing = [];
+  offers.forEach((offer) => {
+    if (!offer.price) return;
+    const code = offer.price.currency;
+    if (!code || code === base) return;
+    if (rates[code] !== undefined) return;
+    if (missing.indexOf(code) === -1) missing.push(code);
+  });
+  return missing;
+}
+
+// Trip-notes text (the FLIGHT:/HOTEL:/RATE: shorthand) -> canonical offers.
+//
+// This is how a hand-reviewed text selection from the extension enters
+// staging: rather than teach the extension the notes grammar, it sends the
+// lines over and the planner's own linesToRows() does the parsing. Any
+// RATE: lines in the text come back alongside, since a captured price in
+// lira is only totalable with its rate.
+// parseCost() hands back a per-night cost already expanded across the stay
+// (€140/night x3 -> 420). A canonical offer carries the *unit* price plus
+// perNight/nights, because offerCostText() re-applies the "/night xN" suffix.
+// Without dividing back out, the cost would be multiplied by the nights twice.
+function perNightUnit(cost) {
+  if (!cost.perNight || !cost.nights || cost.nights <= 1) return { low: cost.low, high: cost.high };
+  return { low: cost.low / cost.nights, high: cost.high / cost.nights };
+}
+
+export function offersFromNotesText(text, defaults = {}) {
+  const { rows, rates } = linesToRows(String(text || ''));
+  const offers = rows.map((row) => {
+    const cost = parseCost(row.costText || '');
+    const times = parseTimes(row.timeText || '');
+    return normalizeOffer({
+      kind: row.category,
+      group: row.group,
+      place: row.category === 'stay' ? row.group : (row.category === 'activity' ? row.option : ''),
+      label: row.option,
+      departure: times.from,
+      arrival: times.to,
+      // parseCost() has already resolved currency, range and per-night
+      // expansion for this text; passing its result avoids re-reading the
+      // string with the permissive scraped-text parser, which would take the
+      // "3" in "EUR140/night x3" for a price.
+      price: cost ? { ...perNightUnit(cost), currency: cost.currency } : null,
+      perNight: cost ? cost.perNight : false,
+      nights: cost ? cost.nights : 1,
+      detail: row.detail,
+      window: row.window,
+    }, { source: defaults.source || 'selection', sourceUrl: defaults.sourceUrl || '' });
+  }).filter(Boolean);
+  return { offers, rates: rates || {} };
 }
 
 // Merge incoming offers into the captured list, newest first, keeping at

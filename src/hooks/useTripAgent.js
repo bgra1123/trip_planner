@@ -13,6 +13,10 @@ import { searchFlights } from '../utils/tripAgentApi.js';
 
 export default function useTripAgent() {
   const [offers, setOffers] = useState([]);
+  // Rates that arrived with a capture (a `RATE:` line in selected text). Kept
+  // so the panel can tell the user which currencies still lack one, and so a
+  // rate they captured isn't silently dropped.
+  const [capturedRates, setCapturedRates] = useState({});
   const [extension, setExtension] = useState({ connected: false, version: null });
   const [search, setSearch] = useState({ busy: false, error: null, live: null, provider: null });
   const mounted = useRef(true);
@@ -20,10 +24,13 @@ export default function useTripAgent() {
   useEffect(() => {
     mounted.current = true;
     const stop = listenForExtension({
-      onOffers: (incoming) => {
+      onOffers: (incoming, envelope) => {
         if (!mounted.current) return;
         setExtension((s) => (s.connected ? s : { ...s, connected: true }));
         setOffers((prev) => mergeOffers(prev, incoming));
+        if (envelope && envelope.rates && Object.keys(envelope.rates).length) {
+          setCapturedRates((prev) => ({ ...prev, ...envelope.rates }));
+        }
       },
       onStatus: (status) => {
         if (!mounted.current) return;
@@ -57,6 +64,7 @@ export default function useTripAgent() {
 
   const clearOffers = useCallback(() => {
     setOffers([]);
+    setCapturedRates({});
     clearExtensionOffers();
   }, []);
 
@@ -73,5 +81,5 @@ export default function useTripAgent() {
     return rows;
   }, [offers]);
 
-  return { offers, extension, search, runFlightSearch, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor };
+  return { offers, capturedRates, extension, search, runFlightSearch, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor };
 }

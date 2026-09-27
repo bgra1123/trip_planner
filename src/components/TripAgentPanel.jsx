@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import useTripAgent from '../hooks/useTripAgent.js';
-import { offerCostText, rowCostIsParseable, offerPreviewRow } from '../utils/tripAgentOffers.js';
+import { offerCostText, rowCostIsParseable, offerPreviewRow, currenciesNeedingRate } from '../utils/tripAgentOffers.js';
 
 const KIND_BADGE = {
   flight: 'bg-blue-100 text-blue-700',
@@ -19,8 +19,8 @@ function priceLabel(offer) {
   return 'no price';
 }
 
-export default function TripAgentPanel({ onAddRows, defaultWindow = '' }) {
-  const { offers, extension, search, runFlightSearch, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor } = useTripAgent();
+export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = {} }) {
+  const { offers, capturedRates, extension, search, runFlightSearch, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor } = useTripAgent();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ from: '', to: '', date: '', adults: '1', currency: 'EUR', window: defaultWindow });
 
@@ -39,6 +39,10 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '' }) {
   }
 
   const unparseable = offers.filter((o) => !rowCostIsParseable(offerPreviewRow(o))).length;
+  // A price in a foreign currency is written faithfully, but the planner can
+  // only put it in a total once a conversion rate exists. Rates already set on
+  // the trip, plus any that arrived with a capture, both count.
+  const missingRates = currenciesNeedingRate(offers, { ...rates, ...capturedRates });
 
   return (
     <div className="bg-white rounded-lg shadow-sm border border-slate-200 mb-8">
@@ -162,8 +166,15 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '' }) {
               </div>
               {unparseable > 0 && (
                 <p className="text-xs text-amber-700 mt-2">
-                  {unparseable} offer{unparseable === 1 ? ' has' : 's have'} a price the planner cannot total automatically —
+                  {unparseable} offer{unparseable === 1 ? ' has' : 's have'} a price the planner cannot read —
                   the captured amount is kept in the row's detail so you can retype it.
+                </p>
+              )}
+              {missingRates.length > 0 && (
+                <p className="text-xs text-amber-700 mt-2 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                  ⚠️ No conversion rate for {missingRates.join(', ')}. These prices are captured correctly, but stay
+                  out of your totals until you add a <code className="bg-amber-100 rounded px-1">RATE: {missingRates[0]} 0.0181</code>{' '}
+                  line under “Edit trip data”.
                 </p>
               )}
               <div className="flex items-center justify-between gap-3 flex-wrap mt-3">

@@ -1,9 +1,35 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
-  groupRows, linesToRows, newRow, costLabel, euro, sumRange, enumerateCombinations,
-  buildExportData, toMarkdown, deriveRouteChain, DEFAULT_TRIP_NOTES,
+  groupRows, linesToRows, newRow, newRowId, bumpRowIdCounter, costLabel, euro, sumRange, enumerateCombinations,
+  convertToBase, buildExportData, toMarkdown, deriveRouteChain, DEFAULT_TRIP_NOTES, costTextIssue,
 } from '../utils/parseTripNotes';
 import TripAgentPanel from './TripAgentPanel';
+
+function ratesToRows(rates) {
+  return Object.entries(rates || {}).map(([code, factor]) => ({ id: newRowId(), code, factor: String(factor) }));
+}
+
+const STORAGE_KEY = 'trip-planner:v1';
+
+// Reads the last-saved trip once per mount. Bumps the row-id counter past
+// any restored id so a freshly added row can never collide with one that
+// was persisted — the counter itself resets to 1 on every page load, but
+// restored rows keep their original ids.
+function loadSavedState() {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object' || !Array.isArray(data.rows)) return null;
+    bumpRowIdCounter([
+      ...data.rows.map((r) => r.id),
+      ...(Array.isArray(data.rateRows) ? data.rateRows.map((r) => r.id) : []),
+    ]);
+    return data;
+  } catch {
+    return null;
+  }
+}
 
 const COMBO_DISPLAY_LIMIT = 3;
 const COMBO_CAP = 4000;
@@ -19,60 +45,136 @@ function pickedOption(group, selMap) {
   return group.options.find((o) => o.idx === id) || group.options[0];
 }
 
-export default function TripPlanner() {
-  const [notesText, setNotesText] = useState(DEFAULT_TRIP_NOTES);
-  const [rows, setRows] = useState(() => linesToRows(DEFAULT_TRIP_NOTES).rows);
-  const [notes, setNotes] = useState(() => linesToRows(DEFAULT_TRIP_NOTES).notes);
-  const [selection, setSelection] = useState({ travel: {}, stay: {}, activity: {} });
+// Every non-universal window value in notes order (first-seen), scanned
+// across travel and stay options. Empty when the trip has no WINDOW: tags.
+function distinctWindowsOf(parsed) {
+  const seen = {}; const order = [];
+  const scan = (groups) => groups.forEach((g) => g.options.forEach((o) => {
+    if (o.window && !seen[o.window]) { seen[o.window] = true; order.push(o.window); }
+  }));
+  scan(parsed.travel);
+  scan(parsed.stay);
+  return order;
+}
 
-  const parsed = useMemo(() => groupRows(rows, notes), [rows, notes]);
-
-  // Keep existing picks where the selected row still exists; default new
-  // groups/activities. Runs after any row add/edit/delete.
-  useEffect(() => {
-    setSelection((prev) => {
-      const travel = {};
-      parsed.travel.forEach((g) => {
-        const cur = prev.travel[g.key];
-        const stillValid = cur && g.options.some((o) => o.idx === cur);
-        travel[g.key] = stillValid ? cur : g.options[0].idx;
-      });
-      const stay = {};
-      parsed.stay.forEach((g) => {
-        const cur = prev.stay[g.key];
-        const stillValid = cur && g.options.some((o) => o.idx === cur);
-        stay[g.key] = stillValid ? cur : g.options[0].idx;
-      });
-      const activity = {};
-      parsed.activities.forEach((a) => {
-        activity[a.idx] = prev.activity[a.idx] !== undefined ? prev.activity[a.idx] : true;
-      });
-      return { travel, stay, activity };
+// Switching the active window means "I'm planning for this date range now"
+// — any pick that belongs to a different window falls back to the first
+// compatible option (universal, untagged options are always compatible).
+// When there are no windows at all, w === '' and every option qualifies, so
+// this also subsumes the plain "fall back if the selected id was deleted"
+// case for window-less trips.
+function reconcileForWindow(parsed, prev, w) {
+  function fix(groups, map) {
+    const next = {};
+    groups.forEach((g) => {
+      const cur = map[g.key];
+      const picked = g.options.find((o) => o.idx === cur);
+      const ok = picked && (!picked.window || picked.window === w);
+      next[g.key] = ok ? cur : (g.options.find((o) => !o.window || o.window === w) || g.options[0]).idx;
     });
+    return next;
+  }
+  const activity = {};
+  parsed.activities.forEach((a) => {
+    activity[a.idx] = prev.activity[a.idx] !== undefined ? prev.activity[a.idx] : true;
+  });
+  return { travel: fix(parsed.travel, prev.travel), stay: fix(parsed.stay, prev.stay), activity };
+}
+
+export default function TripPlanner() {
+  // Read once on mount; restored fields fall back to the example trip
+  // individually so a partially-corrupt save still recovers gracefully.
+  const [saved] = useState(loadSavedState);
+  const [notesText, setNotesText] = useState(() => (saved && typeof saved.notesText === 'string') ? saved.notesText : DEFAULT_TRIP_NOTES);
+  const [rows, setRows] = useState(() => (saved && Array.isArray(saved.rows)) ? saved.rows : linesToRows(DEFAULT_TRIP_NOTES).rows);
+  const [notes, setNotes] = useState(() => (saved && Array.isArray(saved.notes)) ? saved.notes : linesToRows(DEFAULT_TRIP_NOTES).notes);
+  const [rateRows, setRateRows] = useState(() => (saved && Array.isArray(saved.rateRows)) ? saved.rateRows : ratesToRows(linesToRows(DEFAULT_TRIP_NOTES).rates));
+  const [selection, setSelection] = useState(() => (saved && saved.selection) || { travel: {}, stay: {}, activity: {} });
+
+  const rates = useMemo(() => {
+    const m = {};
+    rateRows.forEach((r) => {
+      const code = (r.code || '').trim().toUpperCase();
+      const val = parseFloat(r.factor);
+      if (code && !Number.isNaN(val)) m[code] = val;
+    });
+    return m;
+  }, [rateRows]);
+
+  const parsed = useMemo(() => groupRows(rows, notes, rates), [rows, notes, rates]);
+
+  // Edit panel (notes/rates/table) is collapsed by default — fixing a
+  // transcription mistake is occasional, not something a family member
+  // glancing at the plan needs to see every time. It force-opens whenever
+  // there's nothing to show yet (empty trip), regardless of the last toggle.
+  const [editPanelOpen, setEditPanelOpen] = useState(false);
+  const effectiveEditOpen = editPanelOpen || rows.length === 0;
+
+  const [activeWindow, setActiveWindow] = useState(() => (saved && typeof saved.activeWindow === 'string') ? saved.activeWindow : null);
+  const distinctWindows = useMemo(() => distinctWindowsOf(parsed), [parsed]);
+
+  // Keep existing picks where the selected row still exists and (re)default
+  // new groups/activities and the active window whenever the data changes —
+  // e.g. after a row add/edit/delete, or a notes conversion.
+  useEffect(() => {
+    const w = distinctWindows.length
+      ? (activeWindow && distinctWindows.includes(activeWindow) ? activeWindow : distinctWindows[0])
+      : '';
+    if (w !== activeWindow) setActiveWindow(w);
+    setSelection((prev) => reconcileForWindow(parsed, prev, w));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [parsed]);
+  }, [parsed, distinctWindows]);
+
+  function selectWindow(w) {
+    setActiveWindow(w);
+    setSelection((prev) => reconcileForWindow(parsed, prev, w));
+  }
+
+  // Auto-save the trip so a reload doesn't lose it. localStorage can throw
+  // (private browsing, quota, disabled) — degrade to in-memory-only rather
+  // than crash the app.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        version: 1, notesText, rows, notes, rateRows, selection, activeWindow,
+      }));
+    } catch {
+      // ignore — editing still works for the rest of this session
+    }
+  }, [notesText, rows, notes, rateRows, selection, activeWindow]);
 
   function convertNotesToTable() {
     const result = linesToRows(notesText);
     setRows(result.rows);
     setNotes(result.notes);
+    setRateRows(ratesToRows(result.rates));
     setSelection({ travel: {}, stay: {}, activity: {} });
-  }
-  function addRow(category = 'travel') {
-    setRows((rs) => [...rs, newRow(category)]);
+    setActiveWindow(null);
   }
   // Captured offers arrive as ready-made rows (see utils/tripAgentOffers.js)
-  // and are appended, never merged over existing ones — the user's own
-  // edits are never overwritten by a scrape.
+  // and are appended, never merged over existing ones — a capture can't
+  // overwrite an edit the user is in the middle of making.
   function appendRows(newRows) {
     if (!newRows || !newRows.length) return;
     setRows((rs) => [...rs, ...newRows]);
+  }
+  function addRow(category = 'travel') {
+    setRows((rs) => [...rs, newRow(category)]);
   }
   function deleteRow(id) {
     setRows((rs) => rs.filter((r) => r.id !== id));
   }
   function updateRow(id, field, value) {
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+  }
+  function addRateRow() {
+    setRateRows((rs) => [...rs, { id: newRowId(), code: '', factor: '' }]);
+  }
+  function deleteRateRow(id) {
+    setRateRows((rs) => rs.filter((r) => r.id !== id));
+  }
+  function updateRateRow(id, field, value) {
+    setRateRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
   }
   function pickGroup(kind, groupKey, rowId) {
     setSelection((s) => ({ ...s, [kind]: { ...s[kind], [groupKey]: rowId } }));
@@ -93,18 +195,16 @@ export default function TripPlanner() {
   const stayPicks = parsed.stay.map((g) => pickedOption(g, selection.stay));
   const activityPicks = parsed.activities.filter((a) => selection.activity[a.idx]);
 
-  const travelRange = sumRange(travelPicks);
-  const stayRange = sumRange(stayPicks);
-  const activityRange = sumRange(activityPicks);
+  const travelRange = sumRange(travelPicks, rates);
+  const stayRange = sumRange(stayPicks, rates);
+  const activityRange = sumRange(activityPicks, rates);
   const totalRange = {
     low: travelRange.low + stayRange.low + activityRange.low,
     high: travelRange.high + stayRange.high + activityRange.high,
   };
-
-  const stayNights = parsed.stay.reduce((sum, g) => {
-    const o = pickedOption(g, selection.stay);
-    return sum + (o && o.cost && o.cost.nights ? o.cost.nights : 1);
-  }, 0);
+  const missingRates = Array.from(new Set([
+    ...travelRange.missingCurrencies, ...stayRange.missingCurrencies, ...activityRange.missingCurrencies,
+  ]));
 
   const headerStops = deriveRouteChain(parsed.travel);
 
@@ -115,7 +215,7 @@ export default function TripPlanner() {
     return groups;
   }, [parsed]);
 
-  const comboResult = useMemo(() => enumerateCombinations(comboGroups, COMBO_CAP), [comboGroups]);
+  const comboResult = useMemo(() => enumerateCombinations(comboGroups, rates, COMBO_CAP), [comboGroups, rates]);
 
   const rankedCombos = useMemo(() => {
     if (comboResult.truncated) return null;
@@ -141,6 +241,52 @@ export default function TripPlanner() {
   if (rankedCombos && currentRank >= COMBO_DISPLAY_LIMIT) {
     displayCombos.push({ combo: rankedCombos[currentRank], rank: currentRank });
   }
+  const bestForActiveWindow = rankedCombos
+    ? rankedCombos.find((c) => (c.window || '') === (activeWindow || '')) || null
+    : null;
+
+  // Travel + stay groups, in trip order, filtered to only those with at
+  // least one option compatible with the active window (universal or
+  // tagged). Activities are intentionally excluded — the path is the
+  // travel/stay itinerary; activities get their own compact chip row.
+  const pathNodes = useMemo(() => {
+    const nodes = [];
+    parsed.timelineOrder.forEach((item) => {
+      if (item.type === 'travel') {
+        const g = parsed.travelGroupsByKey[item.key];
+        const compat = g.options.filter((o) => !o.window || o.window === activeWindow);
+        if (compat.length) nodes.push({ type: 'travel', group: g, compat });
+      } else if (item.type === 'stay') {
+        const g = parsed.stayGroupsByKey[item.key];
+        const compat = g.options.filter((o) => !o.window || o.window === activeWindow);
+        if (compat.length) nodes.push({ type: 'stay', group: g, compat });
+      }
+    });
+    return nodes;
+  }, [parsed, activeWindow]);
+
+  // The Trip Path is the primary view, so its total is the FULL trip cost
+  // (travel + stay + checked activities), not just the visualized nodes —
+  // one authoritative number, matching the export total.
+  const pathTotal = useMemo(() => {
+    let low = 0, high = 0;
+    const missing = new Set();
+    pathNodes.forEach((node) => {
+      const selMap = node.type === 'travel' ? selection.travel : selection.stay;
+      const picked = pickedOption(node.group, selMap);
+      if (!picked || !picked.cost) return;
+      const converted = convertToBase(picked.cost, rates);
+      if (converted.missingRate) missing.add(picked.cost.currency);
+      else { low += converted.low; high += converted.high; }
+    });
+    parsed.activities.forEach((a) => {
+      if (!selection.activity[a.idx] || !a.cost) return;
+      const converted = convertToBase(a.cost, rates);
+      if (converted.missingRate) missing.add(a.cost.currency);
+      else { low += converted.low; high += converted.high; }
+    });
+    return { low, high, missingCurrencies: Array.from(missing) };
+  }, [pathNodes, selection, rates, parsed.activities]);
 
   const total = parsed.travel.length + parsed.stay.length + parsed.activities.length + parsed.notes.length;
 
@@ -181,6 +327,25 @@ export default function TripPlanner() {
           </p>
         </div>
 
+        {/* Mode toggle */}
+        <div className="flex items-center gap-3 mb-8 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setEditPanelOpen((v) => !v)}
+            className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 hover:border-blue-500"
+          >
+            {effectiveEditOpen ? 'Hide trip data' : 'Edit trip data'}
+          </button>
+          <span className="text-xs text-slate-500">Fix a transcription mistake, add options, or set exchange rates.</span>
+        </div>
+
+        {/* TripAgent capture (extension + backend) — outside the edit panel
+            on purpose: an offer can arrive while the data-entry tools are
+            collapsed, and its "N waiting" badge has to stay visible. */}
+        <TripAgentPanel onAddRows={appendRows} rates={rates} />
+
+        {effectiveEditOpen && (
+        <>
         {/* Notes input */}
         <div className="bg-white rounded-lg p-4 shadow-sm border border-slate-200 mb-8">
           <label className="block text-xs font-semibold text-slate-900 mb-2 uppercase tracking-wide">Trip Notes</label>
@@ -195,7 +360,10 @@ export default function TripPlanner() {
             Repeat a tag with the same route/place for alternative options. Put a{' '}
             <code className="bg-slate-100 rounded px-1">WINDOW: 14-19 Aug</code> line before a block of options to tag them
             with a date range — combinations will never mix options from different windows;{' '}
-            <code className="bg-slate-100 rounded px-1">WINDOW:</code> alone clears it.
+            <code className="bg-slate-100 rounded px-1">WINDOW:</code> alone clears it. Costs can use other currencies
+            (<code className="bg-slate-100 rounded px-1">TRY21000</code>, <code className="bg-slate-100 rounded px-1">$40</code>) —
+            add a <code className="bg-slate-100 rounded px-1">RATE: TRY 0.018</code> line (EUR per unit) to convert them, or edit the
+            Exchange Rates panel below directly. Costs in a currency with no rate are excluded from totals, with a warning.
           </p>
           <textarea
             value={notesText}
@@ -213,7 +381,7 @@ export default function TripPlanner() {
             </button>
             <button
               type="button"
-              onClick={() => { setNotesText(DEFAULT_TRIP_NOTES); const r = linesToRows(DEFAULT_TRIP_NOTES); setRows(r.rows); setNotes(r.notes); setSelection({ travel: {}, stay: {}, activity: {} }); }}
+              onClick={() => { setNotesText(DEFAULT_TRIP_NOTES); const r = linesToRows(DEFAULT_TRIP_NOTES); setRows(r.rows); setNotes(r.notes); setRateRows(ratesToRows(r.rates)); setSelection({ travel: {}, stay: {}, activity: {} }); setActiveWindow(null); }}
               className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 hover:border-blue-500"
             >
               Load example trip
@@ -227,8 +395,68 @@ export default function TripPlanner() {
           </p>
         </div>
 
-        {/* TripAgent capture (extension + backend) */}
-        <TripAgentPanel onAddRows={appendRows} />
+        {/* Exchange Rates */}
+        <div className="bg-white rounded-lg p-4 shadow-sm border border-slate-200 mb-8">
+          <label className="block text-xs font-semibold text-slate-900 mb-2 uppercase tracking-wide">Exchange Rates</label>
+          <p className="text-xs text-slate-500 mb-3">
+            Base currency is EUR. Enter EUR-per-unit for any other currency used in a cost (e.g. TRY = 0.018). Costs in a
+            currency with no rate here are excluded from totals and combinations, never guessed as 1:1.
+          </p>
+          {rateRows.length === 0 ? (
+            <p className="text-xs text-slate-500 mb-2">No conversion rates set — only EUR costs are included in totals.</p>
+          ) : (
+            <table className="text-xs mb-2">
+              <thead>
+                <tr className="text-slate-500 uppercase text-[0.65rem] tracking-wide">
+                  <th className="text-left font-medium px-2 py-1">Currency</th>
+                  <th className="text-left font-medium px-2 py-1">EUR per unit</th>
+                  <th className="px-2 py-1"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rateRows.map((r) => (
+                  <tr key={r.id} className="border-t border-slate-100">
+                    <td className="px-2 py-1">
+                      <input
+                        type="text"
+                        value={r.code}
+                        onChange={(e) => updateRateRow(r.id, 'code', e.target.value.toUpperCase())}
+                        placeholder="TRY"
+                        maxLength={3}
+                        className="w-16 font-mono text-xs px-1.5 py-1 rounded border border-slate-200 focus:border-blue-400 focus:outline-none uppercase"
+                      />
+                    </td>
+                    <td className="px-2 py-1">
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={r.factor}
+                        onChange={(e) => updateRateRow(r.id, 'factor', e.target.value)}
+                        placeholder="0.018"
+                        className="w-24 font-mono text-xs px-1.5 py-1 rounded border border-slate-200 focus:border-blue-400 focus:outline-none"
+                      />
+                    </td>
+                    <td className="px-2 py-1">
+                      <button type="button" onClick={() => deleteRateRow(r.id)} className="text-slate-400 hover:text-red-600 px-1" aria-label="Delete rate">✕</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <button
+            type="button"
+            onClick={addRateRow}
+            className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 hover:border-blue-500"
+          >
+            + Add rate
+          </button>
+          {missingRates.length > 0 && (
+            <p className="text-xs text-amber-700 mt-3 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+              ⚠️ Currently-picked costs in {missingRates.join(', ')} have no rate and are excluded from the totals below.
+            </p>
+          )}
+        </div>
 
         {/* Editable rows table */}
         <div className="bg-white rounded-lg shadow-sm border border-slate-200 mb-8 overflow-x-auto">
@@ -257,6 +485,7 @@ export default function TripPlanner() {
                 {rows.map((row) => {
                   const gk = rowGroupKey(row);
                   const inputCls = 'w-full min-w-[7rem] font-mono text-xs px-1.5 py-1 rounded border border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none bg-transparent';
+                  const costUnrecognized = costTextIssue(row.costText);
                   return (
                     <tr key={row.id} className="border-t border-slate-100">
                       <td className="px-2 py-1.5">
@@ -328,11 +557,14 @@ export default function TripPlanner() {
                       <td className="px-2 py-1.5">
                         <input
                           type="text"
-                          className={inputCls}
+                          className={costUnrecognized ? `${inputCls} border-red-300 bg-red-50` : inputCls}
                           value={row.costText}
                           onChange={(e) => updateRow(row.id, 'costText', e.target.value)}
                           placeholder="€2100 or free"
+                          title={costUnrecognized ? "Not recognized as a cost — excluded from totals until fixed" : undefined}
+                          aria-invalid={costUnrecognized || undefined}
                         />
+                        {costUnrecognized && <span className="text-red-600 text-[0.65rem]" title="Not recognized as a cost — excluded from totals until fixed">⚠ not recognized</span>}
                       </td>
                       <td className="px-2 py-1.5">
                         <input
@@ -364,90 +596,121 @@ export default function TripPlanner() {
           </div>
         </div>
 
-        {/* Itinerary Timeline */}
-        <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4 md:p-6 mb-8">
-          <h2 className="text-xl font-light text-slate-900 mb-6">Itinerary</h2>
+        </>
+        )}
 
-          {parsed.timelineOrder.length === 0 ? (
+        {/* Trip Path */}
+        <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4 md:p-6 mb-8">
+          <div className="flex items-baseline justify-between gap-3 flex-wrap mb-1">
+            <h2 className="text-xl font-light text-slate-900">Trip Path</h2>
+            {distinctWindows.length > 0 && (
+              <div className="flex gap-1.5 flex-wrap">
+                {distinctWindows.map((w) => (
+                  <button
+                    key={w}
+                    type="button"
+                    onClick={() => selectWindow(w)}
+                    className={`text-[0.65rem] font-semibold uppercase tracking-wide px-2.5 py-1 rounded-full border ${
+                      w === activeWindow ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-slate-300 text-slate-600 hover:border-blue-400'
+                    }`}
+                  >
+                    {w}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-slate-500 mb-4">Travel and accommodation, in order. Swap the option at any node — the total below updates live.</p>
+
+          {pathNodes.length === 0 ? (
             <p className="text-sm text-slate-500 italic">Nothing to show yet — add some notes above.</p>
           ) : (
-            <div className="space-y-6">
-              {(() => {
-                let n = 0;
-                const rendered = [];
-                parsed.timelineOrder.forEach((item, i) => {
-                  const isLast = i === parsed.timelineOrder.length - 1;
-                  if (item.type === 'travel') {
-                    const g = parsed.travelGroupsByKey[item.key];
-                    const o = pickedOption(g, selection.travel);
-                    n += 1;
-                    rendered.push(
-                      <div key={`t-${item.key}`} className="flex gap-3 md:gap-4">
-                        <div className="flex flex-col items-center flex-shrink-0">
-                          <div className={`w-9 md:w-10 h-9 md:h-10 rounded-full ${CAT_NODE.travel} text-white flex items-center justify-center font-semibold text-sm`}>{n}</div>
-                          {!isLast && <div className="w-1 h-12 bg-slate-300 mt-1" />}
+            <>
+              <div className="flex items-center justify-between gap-3 flex-wrap bg-slate-900 text-white rounded-lg px-4 py-3 mb-4">
+                <div className="flex items-baseline gap-3 flex-wrap">
+                  <span className="text-[0.65rem] uppercase tracking-wide text-slate-400">
+                    Trip total{activeWindow ? ` · ${activeWindow}` : ''}
+                  </span>
+                  <span className="text-xl font-semibold tabular-nums">
+                    {euro(pathTotal.low)}{pathTotal.high !== pathTotal.low ? `–${euro(pathTotal.high)}` : ''}
+                  </span>
+                  {pathTotal.missingCurrencies.length > 0 && (
+                    <span className="text-xs text-amber-300">⚠️ {pathTotal.missingCurrencies.join(', ')} excluded (no rate)</span>
+                  )}
+                </div>
+                {bestForActiveWindow && (
+                  <button
+                    type="button"
+                    onClick={() => applyCombo(bestForActiveWindow.picks)}
+                    className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg bg-blue-500 hover:bg-blue-400 text-white flex-shrink-0"
+                  >
+                    Cheapest{activeWindow ? ` for ${activeWindow}` : ''}
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-stretch gap-2 flex-wrap">
+                {pathNodes.map((node, i) => {
+                  const selMap = node.type === 'travel' ? selection.travel : selection.stay;
+                  const picked = pickedOption(node.group, selMap);
+                  const meta = node.type === 'travel'
+                    ? `${picked.time.from || '–'}–${picked.time.to || '–'}`
+                    : (picked.cost && picked.cost.nights > 1 ? `${picked.cost.nights} nights` : '');
+                  return (
+                    <React.Fragment key={`${node.type}-${node.group.key}`}>
+                      <div className="flex-1 min-w-[12rem] max-w-[16rem] bg-white border border-slate-200 rounded-lg shadow-sm p-3 flex flex-col gap-2">
+                        <div className={`flex items-center gap-2 -m-3 mb-0 px-3 pt-3 pb-2 border-t-4 rounded-t-lg ${node.type === 'travel' ? 'border-blue-500' : 'border-purple-500'}`}>
+                          <span className={`w-6 h-6 rounded-full ${CAT_NODE[node.type]} text-white flex items-center justify-center font-semibold text-[0.65rem] flex-shrink-0`}>{i + 1}</span>
+                          <h3 className="text-sm font-semibold text-slate-900 truncate">{node.type === 'travel' ? node.group.key : `${node.group.key} stay`}</h3>
                         </div>
-                        <div className="pb-6 flex-1 min-w-0">
-                          <h3 className="text-sm md:text-base font-semibold text-slate-900 mb-2">{g.key}</h3>
-                          <div className="grid grid-cols-2 gap-3 text-xs mb-3">
-                            <div><p className="text-slate-600">Departure</p><p className="font-semibold text-slate-900">{o.time.from || '–'}</p></div>
-                            <div><p className="text-slate-600">Arrival</p><p className="font-semibold text-slate-900">{o.time.to || '–'}</p></div>
-                            <div><p className="text-slate-600">Cost</p><p className="font-semibold text-slate-900">{costLabel(o)}</p></div>
-                            <div><p className="text-slate-600">Pick</p><p className="font-semibold text-slate-900">{o.label}</p></div>
-                          </div>
-                          {o.detail && <p className="text-xs text-slate-500">{o.detail}</p>}
+                        <select
+                          value={picked.idx}
+                          onChange={(e) => pickGroup(node.type, node.group.key, e.target.value)}
+                          className="w-full text-xs font-mono border border-slate-200 rounded px-1.5 py-1"
+                        >
+                          {node.compat.map((o) => (
+                            <option key={o.idx} value={o.idx}>{o.label}{o.window ? ` [${o.window}]` : ''}</option>
+                          ))}
+                        </select>
+                        <div className="flex items-baseline justify-between gap-2 text-xs">
+                          <span className="text-slate-500">{meta}</span>
+                          <span className="font-semibold text-slate-900">{costLabel(picked)}</span>
                         </div>
                       </div>
-                    );
-                  } else if (item.type === 'stay') {
-                    const g = parsed.stayGroupsByKey[item.key];
-                    const o = pickedOption(g, selection.stay);
-                    n += 1;
-                    rendered.push(
-                      <div key={`s-${item.key}`} className="flex gap-3 md:gap-4">
-                        <div className="flex flex-col items-center flex-shrink-0">
-                          <div className={`w-9 md:w-10 h-9 md:h-10 rounded-full ${CAT_NODE.stay} text-white flex items-center justify-center font-semibold text-sm`}>{n}</div>
-                          {!isLast && <div className="w-1 h-12 bg-slate-300 mt-1" />}
-                        </div>
-                        <div className="pb-6 flex-1 min-w-0">
-                          <h3 className="text-sm md:text-base font-semibold text-slate-900 mb-2">{g.key} stay</h3>
-                          <div className="grid grid-cols-2 gap-3 text-xs mb-3">
-                            <div><p className="text-slate-600">Pick</p><p className="font-semibold text-slate-900">{o.label}</p></div>
-                            <div><p className="text-slate-600">Cost</p><p className="font-semibold text-slate-900">{costLabel(o)}{o.cost && o.cost.nights > 1 ? ` (${o.cost.nights} nights)` : ''}</p></div>
-                          </div>
-                          {o.detail && <p className="text-xs text-slate-500">{o.detail}</p>}
-                        </div>
-                      </div>
-                    );
-                  } else if (item.type === 'activity') {
-                    const a = parsed.activities.find((x) => x.idx === item.id);
-                    if (a && selection.activity[a.idx]) {
-                      n += 1;
-                      rendered.push(
-                        <div key={`a-${a.idx}`} className="flex gap-3 md:gap-4">
-                          <div className="flex flex-col items-center flex-shrink-0">
-                            <div className={`w-9 md:w-10 h-9 md:h-10 rounded-full ${CAT_NODE.activity} text-white flex items-center justify-center font-semibold text-sm`}>{n}</div>
-                            {!isLast && <div className="w-1 h-12 bg-slate-300 mt-1" />}
-                          </div>
-                          <div className="pb-6 flex-1 min-w-0">
-                            <h3 className="text-sm md:text-base font-semibold text-slate-900 mb-1">{a.label}</h3>
-                            <p className="text-xs text-slate-500">{costLabel(a)}{a.detail ? ` · ${a.detail}` : ''}</p>
-                          </div>
-                        </div>
-                      );
-                    }
-                  }
-                });
-                return rendered;
-              })()}
-            </div>
+                      {i < pathNodes.length - 1 && <div className="flex items-center text-slate-400">→</div>}
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+            </>
           )}
         </div>
 
-        {/* Cost Breakdown & Summary */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-          <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4 overflow-x-auto">
-            <h3 className="text-sm font-semibold text-amber-700 mb-3 uppercase tracking-wide">Cost Breakdown</h3>
+        {/* Activities */}
+        {parsed.activities.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-8">
+            {parsed.activities.map((a) => {
+              const checked = !!selection.activity[a.idx];
+              return (
+                <label
+                  key={a.idx}
+                  className={`inline-flex items-center gap-2 text-xs rounded-full border pl-2.5 pr-3 py-1.5 cursor-pointer ${
+                    checked ? 'border-green-500 bg-green-50' : 'border-slate-300 bg-white'
+                  }`}
+                >
+                  <input type="checkbox" checked={checked} onChange={() => toggleActivity(a.idx)} />
+                  <span className="text-slate-900">{a.label}</span>
+                  <span className="font-mono text-slate-500">{costLabel(a)}</span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Cost Breakdown */}
+        <details className="mb-4">
+          <summary className="text-xs font-semibold text-slate-500 uppercase tracking-wide cursor-pointer select-none">Cost breakdown by category</summary>
+          <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mt-2 overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-slate-500 uppercase text-[0.65rem] tracking-wide">
@@ -480,21 +743,13 @@ export default function TripPlanner() {
             </table>
             <p className="text-xs text-slate-500 mt-2">Likely = midpoint of each selection's own quoted range.</p>
           </div>
-
-          <div className="bg-slate-100 rounded-lg p-4 border border-slate-300">
-            <h3 className="text-sm font-semibold text-slate-900 mb-3">Trip Summary</h3>
-            <div className="space-y-2 text-xs">
-              <div className="flex justify-between"><span className="text-slate-600">Travel legs</span><span className="font-semibold text-slate-900">{parsed.travel.length}</span></div>
-              <div className="flex justify-between"><span className="text-slate-600">Nights booked</span><span className="font-semibold text-slate-900">{stayNights}</span></div>
-              <div className="flex justify-between"><span className="text-slate-600">Activities picked</span><span className="font-semibold text-slate-900">{activityPicks.length} of {parsed.activities.length}</span></div>
-            </div>
-          </div>
-        </div>
+        </details>
 
         {/* Time-Window Cost Analysis */}
         {comboGroups.length >= 2 && (
-          <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mb-6 overflow-x-auto">
-            <h3 className="text-sm font-semibold text-amber-700 mb-1 uppercase tracking-wide">Time-Window Cost Analysis</h3>
+        <details className="mb-6">
+          <summary className="text-xs font-semibold text-slate-500 uppercase tracking-wide cursor-pointer select-none">Compare all combinations</summary>
+          <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mt-2 overflow-x-auto">
             {comboResult.truncated ? (
               <p className="text-xs text-slate-500">
                 {comboResult.count.toLocaleString('en-US')} possible combinations — narrow the alternatives per leg to see a ranked comparison.
@@ -504,6 +759,11 @@ export default function TripPlanner() {
                 <p className="text-xs text-slate-500 mb-3">
                   {rankedCombos.length.toLocaleString('en-US')} valid combination{rankedCombos.length === 1 ? '' : 's'} across your travel and stay picks, cheapest first. Click a row to apply it.
                 </p>
+                {comboResult.missingCurrencies && comboResult.missingCurrencies.length > 0 && (
+                  <p className="text-xs text-amber-700 mb-3 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                    ⚠️ Options priced in {comboResult.missingCurrencies.join(', ')} have no rate and are left out of these combinations.
+                  </p>
+                )}
                 <table className="w-full text-xs whitespace-nowrap">
                   <thead>
                     <tr className="text-slate-500 uppercase text-[0.65rem] tracking-wide">
@@ -548,6 +808,7 @@ export default function TripPlanner() {
               </>
             )}
           </div>
+        </details>
         )}
 
         {/* Notes */}

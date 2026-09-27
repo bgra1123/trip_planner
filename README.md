@@ -105,7 +105,8 @@ one covers every site, which is exactly why there are several.
 | Tool | Works on | Effort | Breaks when |
 |------|----------|--------|-------------|
 | **Right-click capture** (`extension/`) | any page, anywhere | select a price, right-click | never |
-| **Automatic scraping** (`extension/`) | supported booking + bank travel portals | none | a site redesigns |
+| **Automatic scraping** (`extension/`) | Google Flights, Kayak, Skyscanner, Booking.com, Trainline, DB | none | a site redesigns |
+| **Bank travel portals** (`extension/` + `backend/`) | Capital One, Amex — in your logged-in session | none | a portal redesigns |
 | **Backend flight search** (`backend/`) | Amadeus, via `npm run backend` | fill a form | an API key expires |
 | **Screenshot transcription** (`scripts/extract-screenshot.mjs`) | a screenshot or a photo of handwritten notes | run the CLI | needs `ANTHROPIC_API_KEY` |
 
@@ -196,6 +197,7 @@ This project is licensed under the **MIT License** — see [LICENSE](LICENSE) fi
 - [ ] Support for multiple travelers
 - [ ] Hotel comparison across MXP vs BGY access
 - [x] Flight capture from booking sites (extension) and a search proxy (backend)
+- [x] Bank travel portal capture (Capital One, Amex) with server-side aggregation
 - [ ] Hotel search in the backend
 - [x] Currency conversion (`RATE:` lines, EUR base)
 - [ ] Weather forecast for travel dates

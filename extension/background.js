@@ -20,6 +20,12 @@ const OPTIONS_KEY = 'tripagent.options';
 const MAX_OFFERS = 200;
 const MENU_ID = 'trip-planner-capture';
 
+// Where bank-portal captures are forwarded, so the aggregator can merge them
+// with API results later — including when this browser tab is long closed.
+// Best-effort only: the extension works perfectly well with no backend, and a
+// failed post is never surfaced as an error.
+const DEFAULT_BACKEND = 'http://localhost:8787';
+
 const PLANNER_URLS = [
   'http://localhost:3000/*',
   'http://127.0.0.1:3000/*',
@@ -121,6 +127,34 @@ function version() {
   return chrome.runtime.getManifest().version;
 }
 
+// Forward to the aggregator's ingest endpoint. Only captures from a source
+// worth keeping server-side go here — a bank portal is the case that matters,
+// since nothing but this extension can ever reach it.
+async function forwardToBackend(source, offers, overrides) {
+  if (!source || !offers.length) return;
+  const options = await readOptions();
+  if (options.backendEnabled === false) return;
+  const base = (options.backendUrl || DEFAULT_BACKEND).replace(/\/+$/, '');
+  const first = offers[0] || {};
+  try {
+    await fetch(`${base}/api/flights/ingest`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source,
+        offers,
+        searchParams: {
+          from: (overrides && overrides.from) || first.from || '',
+          to: (overrides && overrides.to) || first.to || '',
+          date: (overrides && overrides.date) || '',
+        },
+      }),
+    });
+  } catch (err) {
+    // No backend running is the normal case, not a problem worth reporting.
+  }
+}
+
 // ---- selection captures (context menu) -----------------------------------
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -155,8 +189,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     switch (message.type) {
       case 'CAPTURED': {
-        const result = await addOffers(message.offers || []);
-        if (result.added) await pushToPlanner({ type: 'PUSH_OFFERS', offers: message.offers });
+        const offers = message.offers || [];
+        const result = await addOffers(offers);
+        if (result.added) {
+          await pushToPlanner({ type: 'PUSH_OFFERS', offers });
+          if (message.isBankPortal) await forwardToBackend(message.site, offers, message.overrides);
+        }
         sendResponse({ ok: true, ...result });
         break;
       }
@@ -208,7 +246,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         const offers = (reply && reply.offers) || [];
         const result = await addOffers(offers);
-        if (result.added) await pushToPlanner({ type: 'PUSH_OFFERS', offers });
+        if (result.added) {
+          await pushToPlanner({ type: 'PUSH_OFFERS', offers });
+          if (reply && reply.isBankPortal) await forwardToBackend(reply.site, offers, message.overrides);
+        }
         sendResponse({ ok: true, captured: offers.length, ...result });
         break;
       }

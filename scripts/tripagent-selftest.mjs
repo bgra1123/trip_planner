@@ -18,7 +18,8 @@ import {
 import { groupRows, defaultSelection, buildExportData, parseCost, convertToBase } from '../src/utils/parseTripNotes.js';
 import { toOffers, humanDuration } from '../backend/amadeus.mjs';
 import { sampleFlights } from '../backend/sample.mjs';
-import { validateFlightQuery } from '../backend/server.mjs';
+import { validateFlightQuery, handleIngest, paramsFromBody } from '../backend/server.mjs';
+import { ingest, cachedFor, aggregate, summary, clear as clearIngested } from '../backend/aggregator.mjs';
 import { createRequire } from 'node:module';
 
 let passed = 0;
@@ -313,6 +314,94 @@ const noRate = buildExportData(
 check('an unrated lira fare is excluded from the total, not guessed at 1:1',
   noRate.costBreakdown.travel.low, 0);
 check('and the rest of the trip still totals', noRate.costBreakdown.accommodation.low, 240);
+
+// ---- bank travel portals -------------------------------------------------
+// A bank portal can only be read in the user's authenticated browser session,
+// so these adapters are the only path to that data. Two things must hold: the
+// portal's currency is stated rather than guessed, and a points fare is never
+// mistaken for money.
+check('capital one is detected', scrapers.detectSite('https://travel.capitalone.com/search/flights').id, 'capital-one');
+check('amex is detected', scrapers.detectSite('https://travel.americanexpress.com/flights/results').id, 'amex');
+check('bank portals are listed', scrapers.BANK_PORTALS, ['capital-one', 'amex']);
+
+check('points are recognized', scrapers.pointsIn('32,000 miles + $5.60'), '32,000 miles');
+check('pts abbreviation is recognized', scrapers.pointsIn('45,500 pts'), '45,500 pts');
+check('a plain fare has no points', scrapers.pointsIn('$320 round trip'), '');
+// A $5.60 tax beside a points fare is a fee, not the fare. Read as the price it
+// would make a transatlantic flight look like pocket change.
+check('a redemption fee is not read as the fare', scrapers.cashPriceIn('32,000 miles + $5.60 in taxes'), '');
+check('a real cash fare is read', scrapers.cashPriceIn('$320 round trip'), '$320');
+
+const portalDoc = fakeDoc([
+  '10:30 AM \u2013 10:45 PM British Airways 7h 15m Nonstop $320',
+  '6:00 AM \u2013 8:10 PM Virgin Atlantic 9h 10m 1 stop 32,000 miles + $5.60 in taxes',
+  'Filter by airline',
+]);
+const portalOffers = scrapers.scrape(portalDoc, 'https://travel.capitalone.com/search/flights?origin=JFK&destination=LHR', null);
+check('both portal cards are captured', portalOffers.length, 2);
+check('the portal route comes from its url', [portalOffers[0].from, portalOffers[0].to], ['JFK', 'LHR']);
+check('the cash fare keeps the card currency', portalOffers[0].price, '$320');
+check('the portal names itself as the source', portalOffers[0].source, 'capital-one');
+ok('a points fare carries no cash price', portalOffers[1].price === null, JSON.stringify(portalOffers[1].price));
+ok('and says so in its detail', /points/.test(portalOffers[1].detail), portalOffers[1].detail);
+
+// The decisive assertion: a points fare must not contribute money to a total.
+const pointsRow = offerToRow(normalizeOffer({ ...portalOffers[1], kind: 'flight' }) || {}, 'row-points');
+ok('a points fare cannot become a cash row', !pointsRow.costText || !rowCostIsParseable(pointsRow),
+  `costText=${pointsRow.costText}`);
+
+// A bare number on a portal card must not be read as euros. $320 is not \u20ac320.
+const bareDoc = fakeDoc(['07:00 \u2013 19:15 Delta 7h 15m Nonstop 415']);
+const bareOffers = scrapers.scrape(bareDoc, 'https://travel.americanexpress.com/flights?origin=JFK&destination=CDG', null);
+ok('a card with no currency marker is skipped rather than guessed',
+  bareOffers.length === 0 || /USD/.test(String(bareOffers[0].price)),
+  JSON.stringify(bareOffers.map((o) => o.price)));
+
+// ---- aggregator ----------------------------------------------------------
+clearIngested();
+const bankSearch = { from: 'JFK', to: 'LHR', date: '2026-10-15' };
+const BA = { kind: 'flight', from: 'JFK', to: 'LHR', departure: '10:30', arrival: '22:45', carrier: 'British Airways' };
+ingest('capital-one', [
+  { ...BA, price: { amount: 320, currency: 'USD' } },
+  { ...BA, price: { amount: 320, currency: 'USD' } },
+], bankSearch);
+ingest('amex', [{ ...BA, price: { amount: 340, currency: 'USD' } }], bankSearch);
+
+check('ingested data is found for its route', cachedFor(bankSearch).length, 3);
+check('and not for another route', cachedFor({ from: 'IST', to: 'MUC', date: '2026-10-15' }).length, 0);
+check('and not for another date', cachedFor({ ...bankSearch, date: '2026-11-01' }).length, 0);
+check('every ingesting source is summarized', Object.keys(summary().bySource).sort(), ['amex', 'capital-one']);
+
+const apiOffers = [{ kind: 'flight', from: 'JFK', to: 'LHR', departure: '18:00', arrival: '06:10', carrier: 'Virgin', price: { amount: 299, currency: 'USD' }, source: 'amadeus' }];
+const aggregated = aggregate([cachedFor(bankSearch), apiOffers]);
+check('an exact repeat from one source is dropped', aggregated.offers.length, 3);
+// Deliberately NOT deduped across sources: "Capital One wants $320, Amex wants
+// $340 for this same flight" is the comparison the whole feature exists for.
+check('the same flight from two portals is kept for comparison',
+  aggregated.offers.filter((o) => o.carrier === 'British Airways').map((o) => o.source).sort(),
+  ['amex', 'capital-one']);
+check('results are ranked cheapest first', aggregated.offers.map((o) => o.price.amount), [299, 320, 340]);
+check('every answering source is named', aggregated.sources.sort(), ['amadeus', 'amex', 'capital-one']);
+
+// An offer nobody could price sorts last rather than vanishing.
+const withUnpriced = aggregate([[{ kind: 'flight', from: 'JFK', to: 'LHR', carrier: 'Unknown', source: 'x' }], apiOffers]);
+check('an unpriced offer is kept, ranked last', withUnpriced.offers.map((o) => o.carrier), ['Virgin', 'Unknown']);
+
+// ---- ingest endpoint ----------------------------------------------------
+ok('a good ingest is accepted', handleIngest({ source: 'capital-one', flights: [BA], searchParams: bankSearch }).status === 200);
+ok('the guide\'s "flights" key is accepted', handleIngest({ source: 'amex', flights: [BA] }).status === 200);
+ok('and so is "offers"', handleIngest({ source: 'amex', offers: [BA] }).status === 200);
+check('a missing source is refused', handleIngest({ flights: [BA] }).status, 400);
+check('a path-like source is refused', handleIngest({ source: '../../etc/passwd', flights: [BA] }).status, 400);
+check('a non-array payload is refused', handleIngest({ source: 'amex', flights: 'nope' }).status, 400);
+check('an empty payload is refused', handleIngest({ source: 'amex', flights: [] }).status, 400);
+
+// The POST body shape from the guide has to land on the same validator the GET
+// endpoint uses, aliases and all.
+const fromBody = paramsFromBody({ origin: 'JFK', destination: 'LHR', departDate: '2026-10-15', passengers: 2 });
+check('the POST aliases map onto the query', validateFlightQuery(fromBody).query,
+  { from: 'JFK', to: 'LHR', date: '2026-10-15', returnDate: null, adults: 2, currency: 'EUR' });
+clearIngested();
 
 // ---- report --------------------------------------------------------------
 if (failures.length) {

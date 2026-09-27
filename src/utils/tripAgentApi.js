@@ -49,10 +49,19 @@ export async function searchFlights(query) {
     adults: query.adults,
     currency: query.currency,
   });
+  // Each offer already names its own source (a bank portal, or the API), so the
+  // provider is only the fallback for anything that didn't say.
   const offers = normalizeOffers(body && body.offers, {
     kind: 'flight',
     source: (body && body.provider) || 'backend',
     window: query.window || '',
   });
-  return { offers, live: !!(body && body.live), provider: body ? body.provider : null };
+  return {
+    offers,
+    live: !!(body && body.live),
+    provider: body ? body.provider : null,
+    sources: (body && body.sources) || [],
+    ingestedCount: body && body.ingested ? body.ingested.count : 0,
+    providerError: (body && body.providerError) || null,
+  };
 }

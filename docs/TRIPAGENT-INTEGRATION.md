@@ -168,6 +168,44 @@ a third-party script cannot inject offers.
 | `REQUEST_OFFERS`  | re-send what the extension has staged        |
 | `CLEAR_OFFERS`    | drop the extension's staging store           |
 
+## Bank travel portals
+
+Capital One and Amex price the same flights differently from a public API, and
+neither can be queried from a server: the prices only exist inside the user's
+authenticated session. The extension is the only thing that can reach them,
+which is why the data flows the long way round:
+
+```
+  authenticated portal tab              backend                 planner tab
+  ─────────────────────────             ───────                 ───────────
+  content.js scrapes card
+        │
+        ├──── PUSH_OFFERS ───────────────────────────────────▶ staging panel
+        │                                (immediate)
+        └──── POST /api/flights/ingest ─▶ 2h cache
+                                             │
+                                             ▼
+                              GET /api/flights  ──▶ merged + ranked ──▶ panel
+                              (folds in the API's own results)
+```
+
+The direct push is what makes capture feel instant. The ingest copy is what
+makes it survive: the tab closes, the browser restarts, and a search tomorrow
+morning still knows what Capital One was charging — until the two-hour TTL
+expires it, because a stale fare presented as current is worse than none.
+
+Two things the portal adapters are careful about:
+
+- **Currency is stated, never inferred.** These portals quote in the card's
+  currency (USD). A bare `320` read as euros would be wrong by the exchange
+  rate, so a card with no currency marker at all is skipped rather than
+  guessed at.
+- **Points are not money.** Portals quote fares in miles as well as cash
+  (`32,000 miles + $5.60`). Captured as a cash price, that would put tens of
+  thousands of euros into a trip total; and the `$5.60` beside it is a
+  redemption fee, not the fare. A points fare is recorded in the row's detail
+  with no price at all, so it can be seen and never totalled.
+
 ## Backend
 
 `backend/server.mjs` is a dependency-free proxy in front of a flight-search
@@ -175,9 +213,19 @@ API. It exists so credentials never reach the browser, and so the app sees
 one offer shape no matter which provider is behind it.
 
 ```
-GET /api/health
-GET /api/flights?from=IST&to=MUC&date=2026-08-14[&returnDate=][&adults=1][&currency=EUR]
+GET  /api/health
+GET  /api/flights?from=IST&to=MUC&date=2026-08-14[&returnDate=][&adults=1][&currency=EUR]
+POST /api/flights/search    { origin, destination, departDate, passengers, … }
+POST /api/flights/ingest    { source, flights|offers, searchParams }
+GET  /api/flights/ingested?from=&to=&date=
 ```
+
+Every search folds ingested portal data in with the provider's own results,
+drops exact repeats within a source, and ranks cheapest first. The same flight
+from two different portals is deliberately **not** collapsed — that comparison
+is the answer the user came for. If the API fails but portal data answered, the
+response is a `200` carrying a `providerError`: real but incomplete results beat
+none.
 
 With no credentials configured it answers with **sample data**, flagged
 `live: false` and labelled in the UI. That keeps the whole pipeline testable
@@ -222,6 +270,11 @@ checks, and that staging never writes to the plan by itself.
   overrides is always there.
 - **Airport codes vs. city names.** Scraped routes come from the URL when it
   has them; otherwise the popup's override fills them in. Nothing is guessed.
+- **Portal selectors are the most fragile thing here.** The bank portals are
+  authenticated single-page apps with no structured data to fall back on, so
+  their adapters rely on card containers and rendered text. Expect to adjust
+  `rootSelectors` in `scrapers.js` when a portal is redesigned; the symptom is
+  "captured nothing", and right-click capture still works meanwhile.
 - **Round trips are priced once.** Amadeus quotes one price per offer, so it
   is attributed to the outbound leg and the return is marked
   `return (priced with outbound)`. Pricing both would double the total.
@@ -234,10 +287,15 @@ checks, and that staging never writes to the plan by itself.
 
 Not built, in rough order of usefulness:
 
-1. Hotel search in the backend (Amadeus has a hotel API; the offer shape
-   already supports `perNight`/`nights`).
-2. Saved trips — the export in `buildExportData()` is already a complete
-   snapshot, so persistence is a storage decision, not a modelling one.
-3. Per-site scraper adapters where the heuristic proves too loose.
+1. Hotel search, on both paths: Amadeus has a hotel API, and the portals sell
+   hotels through the same card layout the flight adapters already read. The
+   offer shape supports `perNight`/`nights` already.
+2. Real portal selector tuning against live accounts. The adapters are written
+   against the layout the portals document publicly; only a logged-in session
+   shows whether `rootSelectors` need narrowing.
+3. Persisting the ingest cache. It is in-memory, so a backend restart loses
+   it; the shape is already a plain map, so a table or a JSON file would do.
+4. Public-API clients beyond Amadeus (Kayak, Skyscanner), which slot in as
+   another provider module behind `handleFlights()`.
 4. Live exchange rates, so `RATE:` lines don't have to be typed by hand.
    Conversion itself is done — only the rate source is manual.

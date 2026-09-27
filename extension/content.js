@@ -39,11 +39,16 @@
     if (reason === 'auto' && signature === lastSignature) return;
     lastSignature = signature;
     lastSentAt = now;
+    var site = TripAgentScrapers.detectSite(location.href);
     chrome.runtime.sendMessage({
       type: 'CAPTURED',
       offers: offers,
       sourceUrl: location.href,
-      site: TripAgentScrapers.detectSite(location.href).id,
+      site: site.id,
+      // Bank-portal captures are also forwarded to the aggregator: nothing but
+      // this extension can reach an authenticated portal, so that data is worth
+      // keeping server-side after the tab closes.
+      isBankPortal: TripAgentScrapers.BANK_PORTALS.indexOf(site.id) !== -1,
       reason: reason,
     }, function () { void chrome.runtime.lastError; });
   }
@@ -60,7 +65,13 @@
     var offers = capture(message.overrides);
     lastSignature = signatureOf(offers);
     lastSentAt = Date.now();
-    sendResponse({ offers: offers, sourceUrl: location.href, site: TripAgentScrapers.detectSite(location.href).id });
+    var activeSite = TripAgentScrapers.detectSite(location.href);
+    sendResponse({
+      offers: offers,
+      sourceUrl: location.href,
+      site: activeSite.id,
+      isBankPortal: TripAgentScrapers.BANK_PORTALS.indexOf(activeSite.id) !== -1,
+    });
     return true;
   });
 

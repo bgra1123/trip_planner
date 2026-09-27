@@ -23,7 +23,17 @@ var TripAgentScrapers = (function () {
   var DURATION_RE = /\b\d{1,2}\s?hr?\s?\d{0,2}\s?m(?:in)?\b|\b\d{1,2}h\s?\d{0,2}m?\b/i;
   var STOPS_RE = /\b(nonstop|direct|(\d)\s?stops?)\b/i;
 
+  // Bank travel portals: reachable only in the user's authenticated session,
+  // which is the whole reason the extension scrapes them instead of a server
+  // querying an API. They price in the card's currency (USD for these two) and
+  // often quote points as well as cash.
+  var BANK_PORTALS = ['capital-one', 'amex'];
+
   var SITES = [
+    { id: 'capital-one', kind: 'flight', currency: 'USD', test: /travel\.capitalone\.com/i,
+      rootSelectors: ['[data-testid*="flight"]', '[class*="flight-card"]', '[class*="FlightCard"]', 'li[class*="result"]'] },
+    { id: 'amex', kind: 'flight', currency: 'USD', test: /travel\.americanexpress\.com/i,
+      rootSelectors: ['[data-test*="flight"]', '[class*="flight-result"]', '[class*="FlightResult"]', 'li[class*="offer"]'] },
     { id: 'google-flights', kind: 'flight', test: /google\.[a-z.]+\/travel\/flights/i, rootSelectors: ['li[role="listitem"]', 'ul li'] },
     { id: 'kayak', kind: 'flight', test: /kayak\.[a-z.]+\/flights/i, rootSelectors: ['div[class*="result"]', 'div[data-resultid]'] },
     { id: 'skyscanner', kind: 'flight', test: /skyscanner\.[a-z.]+\/transport\/flights/i, rootSelectors: ['div[class*="FlightsResults"] > div', 'div[class*="ItineraryCard"]'] },
@@ -200,6 +210,28 @@ var TripAgentScrapers = (function () {
     return offers;
   }
 
+  // "32,000 miles" / "45,500 points" / "32k pts". A points price is not money:
+  // if it were captured as a cash amount it would land in the trip total as
+  // tens of thousands of euros. It is recorded in the detail instead, and the
+  // offer is left with no price unless a cash figure is also on the card.
+  var POINTS_RE = /(\d[\d,.]*)\s?(?:k\s)?(?:miles|points|pts)\b/i;
+
+  function pointsIn(content) {
+    var m = content.match(POINTS_RE);
+    return m ? m[0].replace(/\s+/g, ' ').trim() : '';
+  }
+
+  // The portals render a cash price with a currency marker; a bare number next
+  // to "miles" is not one. PRICE_RE already requires a marker, so this only has
+  // to reject the case where the marker belongs to a points redemption fee.
+  function cashPriceIn(content) {
+    var m = content.match(PRICE_RE);
+    if (!m) return '';
+    // "$5.60 in taxes" alongside a points fare is a fee, not the fare.
+    if (/\b(tax|taxes|fees?)\b/i.test(content) && POINTS_RE.test(content) && parseFloat(m[0].replace(/[^\d.]/g, '')) < 100) return '';
+    return m[0];
+  }
+
   function firstLine(content) {
     return content.split(/\s[·|]\s|\s{2,}/)[0].slice(0, 80).trim();
   }
@@ -217,11 +249,62 @@ var TripAgentScrapers = (function () {
     return words.length ? words[0].slice(0, 40) : '';
   }
 
+  // ---- Strategy 0: bank travel portals -----------------------------------
+  // Same conservative shape as the generic heuristic, but it knows the card's
+  // currency, and it separates a points fare from a cash one.
+  function fromBankPortal(doc, site, url) {
+    var route = routeFromUrl(url);
+    var offers = [];
+    var seen = Object.create(null);
+
+    candidateNodes(doc, site).forEach(function (node) {
+      var content = text(node);
+      if (content.length < 12 || content.length > 600) return;
+      var times = content.match(TIME_RE) || [];
+      var points = pointsIn(content);
+      var cash = cashPriceIn(content);
+      // A card has to show a schedule and *some* kind of price to be a result.
+      if (times.length < 2 || (!cash && !points)) return;
+
+      var key = content.slice(0, 160);
+      if (seen[key]) return;
+      seen[key] = true;
+
+      var stopsMatch = content.match(STOPS_RE);
+      var durationMatch = content.match(DURATION_RE);
+      var detail = [];
+      if (points) detail.push(points + ' (points — not counted as cash)');
+
+      offers.push({
+        kind: 'flight',
+        from: route ? route.from : '',
+        to: route ? route.to : '',
+        carrier: carrierFrom(content),
+        departure: times[0] || '',
+        arrival: times[1] || '',
+        duration: durationMatch ? durationMatch[0] : '',
+        stops: stopsMatch ? (stopsMatch[2] ? parseInt(stopsMatch[2], 10) : 0) : null,
+        // Currency is stated rather than inferred: these portals quote in the
+        // card's currency, and a bare "320" read as euros would be wrong by
+        // roughly the exchange rate.
+        price: cash ? (/[€$£₺]|\b(?:EUR|USD|GBP|TRY|CHF)\b/i.test(cash) ? cash : site.currency + ' ' + cash) : null,
+        detail: detail.join(' · '),
+        source: site.id,
+        sourceUrl: url,
+      });
+    });
+    return offers;
+  }
+
   // ---- Entry point -------------------------------------------------------
   function scrape(doc, url, overrides) {
     var site = detectSite(url);
     var offers = fromJsonLd(doc);
-    if (offers.length < 2) {
+    if (BANK_PORTALS.indexOf(site.id) !== -1) {
+      // Portals are authenticated app shells and publish no useful JSON-LD,
+      // so the portal pass is authoritative here.
+      offers = fromBankPortal(doc, site, url);
+    } else if (offers.length < 2) {
       offers = offers.concat(fromHeuristic(doc, site, url));
     }
     var o = overrides || {};
@@ -240,7 +323,11 @@ var TripAgentScrapers = (function () {
     });
   }
 
-  return { scrape: scrape, detectSite: detectSite, routeFromUrl: routeFromUrl, placeFromUrl: placeFromUrl };
+  return {
+    scrape: scrape, detectSite: detectSite, routeFromUrl: routeFromUrl,
+    placeFromUrl: placeFromUrl, pointsIn: pointsIn, cashPriceIn: cashPriceIn,
+    BANK_PORTALS: BANK_PORTALS,
+  };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = TripAgentScrapers;

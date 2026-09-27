@@ -18,7 +18,7 @@ export default function useTripAgent() {
   // rate they captured isn't silently dropped.
   const [capturedRates, setCapturedRates] = useState({});
   const [extension, setExtension] = useState({ connected: false, version: null });
-  const [search, setSearch] = useState({ busy: false, error: null, live: null, provider: null });
+  const [search, setSearch] = useState({ busy: false, error: null, live: null, provider: null, sources: [], ingestedCount: 0, providerError: null });
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -51,6 +51,11 @@ export default function useTripAgent() {
         error: result.offers.length ? null : 'Backend returned no offers for that route and date.',
         live: result.live,
         provider: result.provider,
+        sources: result.sources,
+        ingestedCount: result.ingestedCount,
+        // The API failing while scraped portal data still answered is worth
+        // saying out loud: the results are real but incomplete.
+        providerError: result.providerError,
       });
     } catch (err) {
       if (!mounted.current) return;

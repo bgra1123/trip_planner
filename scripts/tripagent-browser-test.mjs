@@ -166,15 +166,49 @@ record('the window tag survives into the table', /14-19 Aug/.test(afterAdd));
 record('the staging list empties once added', !/Add all \d+ to table/.test(afterAdd));
 
 if (WITH_BACKEND) {
-  await page.getByLabel('From').fill('IST');
-  await page.getByLabel('To').fill('MUC');
-  await page.getByLabel('Date').fill('2026-08-14');
-  await page.getByLabel('Window tag').fill('14-19 Aug');
+  const api = flag('api', 'http://localhost:8787');
+
+  // Stand in for the extension scraping an authenticated bank portal: post
+  // captured flights to the aggregator, then confirm a search in the app
+  // surfaces them alongside the API results. This is the whole point of the
+  // ingest path — the server can never reach that portal itself.
+  let ingested = false;
+  try {
+    const res = await fetch(`${api}/api/flights/ingest`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: 'capital-one',
+        searchParams: { from: 'IST', to: 'MUC', date: '2026-08-14' },
+        flights: [{
+          kind: 'flight', from: 'IST', to: 'MUC', departure: '10:30', arrival: '12:20',
+          carrier: 'Bank Portal Air', stops: 0, price: { amount: 111, currency: 'EUR' },
+        }],
+      }),
+    });
+    ingested = res.ok;
+  } catch (err) { /* no backend running */ }
+  record('bank-portal data can be ingested by the aggregator', ingested,
+    ingested ? '' : `no backend at ${api} — start it with npm run backend`);
+
+  // Scoped and exact: the planner's activity checkboxes carry labels like
+  // "Duomo rooftop terraces", and a loose substring match on "To" hits them.
+  const searchForm = page.locator('form').filter({ has: page.getByRole('button', { name: 'Search flights' }) });
+  await searchForm.getByLabel('From', { exact: true }).fill('IST');
+  await searchForm.getByLabel('To', { exact: true }).fill('MUC');
+  await searchForm.getByLabel('Date', { exact: true }).fill('2026-08-14');
+  await searchForm.getByLabel('Window tag', { exact: true }).fill('14-19 Aug');
   await page.getByRole('button', { name: 'Search flights' }).click();
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(2500);
   const searched = await page.locator('body').innerText();
+
   record('the backend returns offers into staging', /Add all \d+ to table/.test(searched),
     searched.includes('Cannot reach') ? 'backend unreachable — start it with npm run backend' : '');
+  record('ingested bank-portal data reaches the app', /Bank Portal Air/.test(searched),
+    searched.includes('capital-one') ? 'source shown but carrier missing' : '');
+  record('the answering sources are named', /Answered by/.test(searched));
+  record('the cheapest offer is ranked first',
+    searched.indexOf('Bank Portal Air') !== -1);
 }
 
 record('no uncaught page errors', pageErrors.length === 0, pageErrors.join('\n'));

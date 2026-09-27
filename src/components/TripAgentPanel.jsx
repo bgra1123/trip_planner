@@ -110,6 +110,17 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
           </form>
 
           {search.error && <p className="text-xs text-red-600 mb-2">{search.error}</p>}
+          {search.providerError && (
+            <p className="text-xs text-amber-700 mb-2">
+              The flight API failed ({search.providerError}) — results below are from captured portal data only.
+            </p>
+          )}
+          {search.sources && search.sources.length > 0 && (
+            <p className="text-xs text-slate-500 mb-2">
+              Answered by {search.sources.join(', ')}
+              {search.ingestedCount ? ` · ${search.ingestedCount} from captured bank-portal data` : ''}.
+            </p>
+          )}
           {search.live === false && (
             <p className="text-xs text-amber-700 mb-2">
               Backend answered with sample data — set AMADEUS_CLIENT_ID and AMADEUS_CLIENT_SECRET for live prices.

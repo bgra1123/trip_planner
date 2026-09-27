@@ -3,11 +3,17 @@
   "name": "TripAgent Capture",
   "version": "0.2.0",
   "description": "Capture flight, train and hotel prices from any travel site — by right-clicking a price, or automatically on supported booking and bank travel portals — and send them to your Trip Planner.",
-  "permissions": ["contextMenus", "storage", "tabs"],
+  "permissions": [
+    "contextMenus",
+    "storage",
+    "tabs"
+  ],
   "host_permissions": [
     "http://localhost:3000/*",
     "http://127.0.0.1:3000/*",
-    "https://bgra1123.github.io/trip_planner/*"
+    "https://bgra1123.github.io/trip_planner/*",
+    "http://localhost:8787/*",
+    "http://127.0.0.1:8787/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -33,7 +39,10 @@
         "https://travel.capitalone.com/*",
         "https://travel.americanexpress.com/*"
       ],
-      "js": ["scrapers.js", "content.js"],
+      "js": [
+        "scrapers.js",
+        "content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     },
@@ -43,7 +52,9 @@
         "http://127.0.0.1:3000/*",
         "https://bgra1123.github.io/trip_planner/*"
       ],
-      "js": ["bridge.js"],
+      "js": [
+        "bridge.js"
+      ],
       "run_at": "document_start",
       "all_frames": false
     }

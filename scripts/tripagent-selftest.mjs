@@ -13,7 +13,7 @@
 import {
   normalizeTime, normalizePrice, normalizeOffer, normalizeOffers,
   offerToRow, offersToRows, offerCostText, rowCostIsParseable, mergeOffers,
-  offersFromNotesText, currenciesNeedingRate,
+  offersFromNotesText, currenciesNeedingRate, offerFromLink,
 } from '../src/utils/tripAgentOffers.js';
 import { groupRows, defaultSelection, buildExportData, parseCost, convertToBase } from '../src/utils/parseTripNotes.js';
 import { toOffers, humanDuration } from '../backend/amadeus.mjs';
@@ -154,6 +154,29 @@ check('a per-night capture keeps its unit price', capturedRows[1].costText, '€
 check('and still totals to the whole stay', parseCost(capturedRows[1].costText).low, 420);
 check('a captured route becomes a leg', capturedRows[0].group, 'IST → MUN');
 check('the captured rate answers its own currency', currenciesNeedingRate(captured.offers, captured.rates), []);
+
+// ---- save a link as an activity -------------------------------------------
+// A reel/blog link plus the user's own note becomes an activity offer through
+// the same normalizeOffer()/offerToRow() pipeline a scraped or pasted capture
+// uses — no parallel row shape, and no fetch of the link's content.
+const linked = offerFromLink('https://instagram.com/reel/abc123', 'Rooftop bar with sunset views');
+check('a saved link becomes an activity', linked.category, 'activity');
+check('the note is the activity label, verbatim', linked.label, 'Rooftop bar with sunset views');
+check('the url is preserved on the offer', linked.sourceUrl, 'https://instagram.com/reel/abc123');
+check('no price is invented for a saved link', linked.price, null);
+
+const linkedRow = offerToRow(linked, 'row-link');
+check('the saved-link row is an activity row', linkedRow.category, 'activity');
+check('the saved-link row option is the user\'s own note', linkedRow.option, 'Rooftop bar with sunset views');
+ok('the source url is folded into the row detail, never dropped',
+  linkedRow.detail.includes('https://instagram.com/reel/abc123'), linkedRow.detail);
+check('the row carries no fabricated cost', linkedRow.costText, '');
+
+// Whitespace-only input is the same as missing — nothing to fold in, so
+// nothing is built (never a blank/guessed activity).
+ok('a link with no note is refused', offerFromLink('https://example.com/x', '   ') === null);
+ok('a note with no link is refused', offerFromLink('  ', 'Nice view') === null);
+ok('two blanks are refused', offerFromLink('', '') === null);
 
 // ---- dedupe --------------------------------------------------------------
 const dupA = normalizeOffer({ kind: 'flight', from: 'IST', to: 'MUC', departure: '06:45', price: '€2100', carrier: 'TK' });

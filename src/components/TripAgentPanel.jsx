@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import useTripAgent from '../hooks/useTripAgent.js';
-import { offerCostText, rowCostIsParseable, offerPreviewRow, currenciesNeedingRate } from '../utils/tripAgentOffers.js';
+import { offerCostText, rowCostIsParseable, offerPreviewRow, currenciesNeedingRate, offerFromLink, offerToRow } from '../utils/tripAgentOffers.js';
 
 const KIND_BADGE = {
   flight: 'bg-blue-100 text-blue-700',
@@ -23,14 +23,30 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
   const { offers, capturedRates, extension, search, runFlightSearch, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor } = useTripAgent();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ from: '', to: '', date: '', adults: '1', currency: 'EUR', window: defaultWindow });
+  const [linkForm, setLinkForm] = useState({ url: '', note: '' });
 
   function setField(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
   }
 
+  function setLinkField(field, value) {
+    setLinkForm((f) => ({ ...f, [field]: value }));
+  }
+
   function handleSearch(e) {
     e.preventDefault();
     runFlightSearch(form);
+  }
+
+  // Straight to the table, the same shape a captured price already takes —
+  // no staging step, since typing the note and clicking "Save as activity"
+  // already is the review step.
+  function handleSaveLink(e) {
+    e.preventDefault();
+    const offer = offerFromLink(linkForm.url, linkForm.note);
+    if (!offer) return;
+    if (onAddRows) onAddRows([offerToRow(offer)]);
+    setLinkForm({ url: '', note: '' });
   }
 
   function addOffers(ids) {
@@ -71,6 +87,44 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
           <p className="text-xs text-slate-500 mb-3">
             Offers captured by the browser extension or fetched from the backend land here first. Nothing reaches
             your table until you add it, so a bad scrape can never rewrite a plan you are working on.
+          </p>
+
+          {/* Save a link as an activity — a reel, a blog post, a listing, plus
+              the user's own note about it. Nothing at the link is fetched or
+              parsed; the note is the whole description, and the link is kept
+              (never dropped) by folding it into the saved row's detail text. */}
+          <form onSubmit={handleSaveLink} className="flex flex-wrap items-end gap-2 mb-2 pb-3 border-b border-slate-100">
+            <label className="text-[0.65rem] uppercase tracking-wide text-slate-500">
+              <span className="block mb-1">Link</span>
+              <input
+                type="text"
+                value={linkForm.url}
+                onChange={(e) => setLinkField('url', e.target.value)}
+                placeholder="https://..."
+                className="w-56 font-mono text-xs px-2 py-1.5 rounded border border-slate-300 focus:border-blue-400 focus:outline-none normal-case"
+              />
+            </label>
+            <label className="text-[0.65rem] uppercase tracking-wide text-slate-500">
+              <span className="block mb-1">What you liked</span>
+              <input
+                type="text"
+                value={linkForm.note}
+                onChange={(e) => setLinkField('note', e.target.value)}
+                placeholder="Rooftop bar with sunset views"
+                className="w-56 text-xs px-2 py-1.5 rounded border border-slate-300 focus:border-blue-400 focus:outline-none normal-case"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={!linkForm.url.trim() || !linkForm.note.trim()}
+              className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:bg-slate-300"
+            >
+              Save as activity
+            </button>
+          </form>
+          <p className="text-xs text-slate-500 mb-3">
+            Paste a link and your own short note about it — it's added straight to the table as an activity, with the
+            link kept in its detail so it's never lost.
           </p>
 
           {/* Backend flight search */}

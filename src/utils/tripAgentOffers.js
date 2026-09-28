@@ -368,6 +368,27 @@ export function offersFromNotesText(text, defaults = {}) {
   return { offers, rates: rates || {} };
 }
 
+// A pasted link (a shared reel, a blog post, a listing — anything) plus the
+// user's own short note about it becomes an activity offer, the same way a
+// scraped page or a pasted notes block does. There is no fetch of the URL
+// and no attempt to extract a place or a price from it: the note the user
+// typed IS the activity's description, and the link is only preserved
+// (never guessed at or dropped) by folding it into the row's detail text via
+// offerDetail() below. Returns null if either half is missing — no
+// half-formed row, and nothing invented to fill the gap.
+export function offerFromLink(url, note, defaults = {}) {
+  const cleanUrl = clean(url);
+  const cleanNote = clean(note);
+  if (!cleanUrl || !cleanNote) return null;
+  return normalizeOffer({
+    kind: 'activity',
+    name: cleanNote,
+    label: cleanNote,
+    detail: `Saved link: ${cleanUrl}`,
+    sourceUrl: cleanUrl,
+  }, { source: defaults.source || 'link' });
+}
+
 // Merge incoming offers into the captured list, newest first, keeping at
 // most `limit` and collapsing re-captures of the same offer.
 export function mergeOffers(existing, incoming, limit = 100) {

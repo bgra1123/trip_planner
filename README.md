@@ -105,10 +105,15 @@ one covers every site, which is exactly why there are several.
 | Tool | Works on | Effort | Breaks when |
 |------|----------|--------|-------------|
 | **Right-click capture** (`extension/`) | any page, anywhere | select a price, right-click | never |
+| **Capture this page** (`extension/`) | any page, anywhere | click one button | a page has no readable prices |
 | **Automatic scraping** (`extension/`) | Google Flights, Kayak, Skyscanner, Booking.com, Trainline, DB | none | a site redesigns |
 | **Bank travel portals** (`extension/` + `backend/`) | Capital One, Amex — in your logged-in session | none | a portal redesigns |
 | **Backend flight search** (`backend/`) | Amadeus, via `npm run backend` | fill a form | an API key expires |
 | **Screenshot transcription** (`scripts/extract-screenshot.mjs`) | a screenshot or a photo of handwritten notes | run the CLI | needs `ANTHROPIC_API_KEY` |
+
+The extension is not restricted to a list of sites: the first two rows work on
+whatever page you have open. The site-specific rows only buy *automatic*
+capture, so you don't have to click anything there.
 
 Everything converges on the same trip-notes shorthand and the same editable
 rows, so nothing downstream needs to know where a line came from.

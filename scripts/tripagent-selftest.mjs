@@ -21,6 +21,8 @@ import { sampleFlights } from '../backend/sample.mjs';
 import { validateFlightQuery, handleIngest, paramsFromBody } from '../backend/server.mjs';
 import { ingest, cachedFor, aggregate, summary, clear as clearIngested } from '../backend/aggregator.mjs';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 
 let passed = 0;
 const failures = [];
@@ -315,6 +317,60 @@ check('an unrated lira fare is excluded from the total, not guessed at 1:1',
   noRate.costBreakdown.travel.low, 0);
 check('and the rest of the trip still totals', noRate.costBreakdown.accommodation.low, 240);
 
+// ---- capture on an unrecognized page -------------------------------------
+// The extension injects its scraper on demand, so capture has to work on a
+// site nobody wrote an adapter for. Two things must hold there: the kind is
+// read from the page rather than assumed, and a price alone is enough to
+// qualify a row (an unknown page has no departure/arrival structure to lean on).
+function pageDoc(texts, title) {
+  const nodes = texts.map((textContent) => ({ textContent }));
+  return {
+    title: title || '',
+    querySelector() { return null; },
+    querySelectorAll(selector) {
+      if (selector === 'script[type="application/ld+json"]') return [];
+      if (selector === 'li') return nodes;
+      return [];
+    },
+  };
+}
+
+check('an unknown site is marked generic', scrapers.detectSite('https://example.com/x', pageDoc([], '')).generic, true);
+check('a hotel page is read as a stay', scrapers.detectSite('https://smallhotel.example/rooms', pageDoc([], 'Deluxe rooms in Milan')).kind, 'hotel');
+check('a rail page is read as a train', scrapers.detectSite('https://example.com/rail/tickets', pageDoc([], 'Rail tickets')).kind, 'train');
+check('a coach page is read as a bus', scrapers.detectSite('https://flixbus.example/search', pageDoc([], 'Bus from Munich')).kind, 'bus');
+check('an attraction page is read as an activity', scrapers.detectSite('https://tickets.example/duomo', pageDoc([], 'Duomo rooftop admission')).kind, 'activity');
+// "stay" is tested before "travel" on purpose: a hotel page mentions airports
+// far more often than a flight page mentions rooms.
+check('a hotel near an airport is still a stay', scrapers.detectSite('https://example.com/hotel', pageDoc([], 'Hotel near Munich Airport \u2014 rooms from')).kind, 'hotel');
+
+// A nightly rate on an unknown hotel page, with no clock times anywhere.
+const unknownHotel = scrapers.scrape(
+  pageDoc(['Garden Room \u20ac95 per night Free cancellation', 'Sort by price'], 'Rooms in Milan'),
+  'https://smallhotel.example/rooms', null
+);
+check('an unknown hotel page yields its priced row', unknownHotel.length, 1);
+check('and is categorized as a stay', unknownHotel[0].kind, 'hotel');
+const unknownHotelRow = offerToRow(normalizeOffer(unknownHotel[0]), 'row-uh');
+check('the unknown stay row lands in the stay bucket', unknownHotelRow.category, 'stay');
+ok('and carries a usable cost', rowCostIsParseable(unknownHotelRow), unknownHotelRow.costText);
+
+// A priced row with no times on an unknown page must still be captured — the
+// two-clock-times rule only applies to the sites that actually have them.
+const unknownFare = scrapers.scrape(
+  pageDoc(['Vienna to Budapest coach \u20ac19 one way'], 'Bus tickets'),
+  'https://coach.example/search', null
+);
+check('a priced row with no times is kept on an unknown page', unknownFare.length, 1);
+
+// Known sites keep the stricter rule, or their navigation and filter chrome
+// would be captured as results.
+const knownNoTimes = scrapers.scrape(
+  fakeDoc(['Flights from \u20ac1,950', 'Baggage from \u20ac25']),
+  'https://www.kayak.com/flights/IST-MUC/2026-08-14', null
+);
+check('a known flight site still requires two times', knownNoTimes.length, 0);
+
 // ---- bank travel portals -------------------------------------------------
 // A bank portal can only be read in the user's authenticated browser session,
 // so these adapters are the only path to that data. Two things must hold: the
@@ -402,6 +458,135 @@ const fromBody = paramsFromBody({ origin: 'JFK', destination: 'LHR', departDate:
 check('the POST aliases map onto the query', validateFlightQuery(fromBody).query,
   { from: 'JFK', to: 'LHR', date: '2026-10-15', returnDate: null, adults: 2, currency: 'EUR' });
 clearIngested();
+
+// ---- capturing from whatever tab is open ---------------------------------
+// The service worker injects the scraper on demand so capture works on pages
+// no adapter was written for. That logic decides whether to reuse an existing
+// content script, whether a page can be touched at all, and what to say when
+// it can't — so it is exercised here against a stubbed extension API rather
+// than trusted to review.
+function loadWorker({ tabUrl = 'https://smallhotel.example/rooms', contentScriptReply = null, injectResult = undefined, injectThrows = null } = {}) {
+  const calls = { sendMessage: 0, executeScript: [], badge: [] };
+  const store = {};
+  const area = () => ({
+    get: async (key) => ({ [key]: store[key] }),
+    set: async (obj) => { Object.assign(store, obj); },
+  });
+  const chromeStub = {
+    storage: { session: area(), local: area() },
+    action: {
+      setBadgeText: async (o) => { calls.badge.push(o.text); },
+      setBadgeBackgroundColor: async () => {},
+    },
+    contextMenus: { create: () => {}, onClicked: { addListener: () => {} } },
+    runtime: {
+      lastError: undefined,
+      getManifest: () => ({ version: '0.3.0' }),
+      onInstalled: { addListener: () => {} },
+      onMessage: { addListener: () => {} },
+    },
+    tabs: {
+      query: async () => [{ id: 7, url: tabUrl }],
+      sendMessage: async () => {
+        calls.sendMessage += 1;
+        if (!contentScriptReply) throw new Error('Receiving end does not exist.');
+        return contentScriptReply;
+      },
+    },
+    scripting: {
+      executeScript: async (opts) => {
+        calls.executeScript.push(opts.files ? opts.files.join(',') : 'func');
+        if (injectThrows) throw new Error(injectThrows);
+        if (opts.files) return [{}];
+        return [{ result: injectResult }];
+      },
+    },
+  };
+  const context = vm.createContext({
+    chrome: chromeStub,
+    fetch: async () => ({ ok: true }),
+    console,
+    setTimeout,
+    URL,
+    Promise,
+    JSON,
+    Object,
+    Array,
+    String,
+    Number,
+    Boolean,
+    Math,
+    Date,
+    Set,
+    Error,
+    RegExp,
+    Buffer,
+    importScripts: () => {},
+    TripCapture: { cleanText: (t) => t, guessCategory: () => 'note' },
+  });
+  vm.runInContext(readFileSync(new URL('../extension/background.js', import.meta.url), 'utf8'), context);
+  return { captureFromTab: context.captureFromTab, calls };
+}
+
+// A site with a declared content script already has the scraper running, with
+// its own debounce and page observation. Reuse it rather than injecting twice.
+{
+  const { captureFromTab, calls } = loadWorker({
+    tabUrl: 'https://www.kayak.com/flights/IST-MUC/2026-08-14',
+    contentScriptReply: { offers: [{ kind: 'flight' }], site: 'kayak' },
+  });
+  const reply = await captureFromTab({ id: 7, url: 'https://www.kayak.com/flights/IST-MUC/2026-08-14' }, {});
+  check('an existing content script is reused', reply.site, 'kayak');
+  check('and nothing is injected on top of it', calls.executeScript, []);
+}
+
+// The case this change exists for: a page with no content script at all.
+{
+  const { captureFromTab, calls } = loadWorker({
+    injectResult: { offers: [{ kind: 'hotel', place: 'Milan' }], site: 'unknown', kind: 'hotel' },
+  });
+  const reply = await captureFromTab({ id: 7, url: 'https://smallhotel.example/rooms' }, {});
+  check('an unlisted page is captured by injection', reply.offers.length, 1);
+  check('the scraper file is injected before the call that uses it', calls.executeScript, ['scrapers.js', 'func']);
+  check('the injected result carries the guessed kind', reply.kind, 'hotel');
+  ok('the content script was tried first', calls.sendMessage === 1);
+}
+
+// Pages no extension may touch, whatever its permissions. Naming the reason
+// beats a generic failure the user can only guess at.
+for (const blocked of ['chrome://settings', 'about:blank', 'devtools://devtools/x', 'https://chromewebstore.google.com/detail/x']) {
+  const { captureFromTab, calls } = loadWorker({ tabUrl: blocked });
+  let message = '';
+  try {
+    await captureFromTab({ id: 7, url: blocked }, {});
+  } catch (err) {
+    message = err.message;
+  }
+  ok(`a restricted page is refused with a reason (${blocked.split(':')[0]})`,
+    /Chrome blocks extensions/.test(message), message);
+  check(`and nothing is injected into it (${blocked.split(':')[0]})`, calls.executeScript, []);
+}
+
+// An injection that fails for any other reason must say so, and point at the
+// path that always works.
+{
+  const { captureFromTab } = loadWorker({ injectThrows: 'Frame was detached' });
+  let message = '';
+  try {
+    await captureFromTab({ id: 7, url: 'https://smallhotel.example/rooms' }, {});
+  } catch (err) {
+    message = err.message;
+  }
+  ok('a failed injection reports the cause', /Frame was detached/.test(message), message);
+  ok('and points at right-click capture', /[Rr]ight-click/.test(message), message);
+}
+
+// A page that yields nothing is not an error — it is an empty capture.
+{
+  const { captureFromTab } = loadWorker({ injectResult: undefined });
+  const reply = await captureFromTab({ id: 7, url: 'https://smallhotel.example/rooms' }, {});
+  check('an empty injection result is handled', reply.offers, []);
+}
 
 // ---- report --------------------------------------------------------------
 if (failures.length) {

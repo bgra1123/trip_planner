@@ -1,18 +1,24 @@
 # TripAgent Capture (browser extension)
 
-Two ways to get a price out of a browser tab and into your trip plan, because
-no single mechanism covers every site.
+Gets prices out of a browser tab and into your trip plan. **It works on
+whatever page you have open** — there is no list of supported sites you have to
+stay inside.
 
-| | Selected prices | Scraped offers |
-|---|---|---|
-| **Works on** | any page, anywhere | supported booking + bank travel portals |
-| **You do** | select a price, right-click | nothing — or click *Capture this page* |
-| **You get** | a text line you review and fix | structured route/time/price rows |
-| **Breaks when** | never | a site redesigns its markup |
+| | Right-click a price | Capture this page | Automatic |
+|---|---|---|---|
+| **Works on** | any page | any page | known travel sites |
+| **You do** | select, right-click | click one button | nothing |
+| **You get** | a text line you review and fix | structured route/time/price rows | the same rows |
+| **Breaks when** | never | a page has no readable prices | a site redesigns |
 
-The first always works and needs a moment of your attention. The second needs
-no attention and sometimes stops working. Having both means a site redesign
-costs you convenience, not the ability to capture at all.
+Only the last row is site-specific, and it is just a convenience: on Kayak or
+Booking.com the results are picked up as they load, so there is nothing to
+click. Everywhere else, *Capture this page* reads the page you are on.
+
+That works without the extension asking for access to every site you visit.
+Clicking the toolbar icon grants it `activeTab` — permission for that one tab,
+for that one moment — and the scraper is injected there on demand. Nothing runs
+on your other tabs.
 
 ## Install
 
@@ -41,12 +47,22 @@ parses with its own notes grammar — the extension never reimplements it.
 
 ## Scraped offers
 
-Open a flight or hotel search on a supported site and let the results render.
-The extension captures automatically (debounced, and only when the results
-actually changed) and pushes to any open planner tab.
+Open any flight or hotel search and click **Capture this page**. On the known
+travel sites you don't even need that — results are picked up as they render
+(debounced, and only when they actually changed) and pushed to any open planner
+tab.
 
-When a page isn't recognised, or its URL doesn't carry the route, use the
-popup:
+On a site nobody wrote an adapter for, the extension works out what the page is
+selling from its URL and title, so a small hotel's booking page produces *stay*
+rows rather than flights. A page with priced rows and no clock times still
+captures; on the known flight sites two times are required, or their filter and
+navigation chrome would be captured as results.
+
+Some pages are off limits to every extension, whatever its permissions —
+`chrome://` pages, the Web Store, DevTools. The popup says so plainly rather
+than failing silently.
+
+Use the popup's fields when a page's URL doesn't carry the route:
 
 - **From / To / Window** — overrides. These beat whatever the URL said and are
   remembered. `Window` is the planner's date-window label (`14-19 Aug`), which
@@ -57,12 +73,13 @@ popup:
 Scraped offers are reproducible by re-scraping, so they live in
 `chrome.storage.session` and are dropped on browser restart.
 
-### Supported sites
+### Sites with automatic capture
 
 Google Flights, Kayak, Skyscanner, Booking.com, Trainline, DB, and the
-Capital One and Amex travel portals — see `matches` in `manifest.json`.
-"Supported" means the content script is injected; whether a page yields
-anything depends on its markup.
+Capital One and Amex travel portals — see `matches` in `manifest.json`. These
+are the only ones where a content script runs on page load; everywhere else
+capture happens when you ask for it. Adding a site to that list buys automatic
+capture and a tuned adapter, not the ability to capture there at all.
 
 Bank travel portals require you to be logged in. The extension runs in your
 browser with your session, so authentication is simply yours — nothing about
@@ -78,7 +95,9 @@ Three strategies, in order (`scrapers.js`):
 2. **JSON-LD** — the `application/ld+json` blocks sites publish for search
    engines. Stable and unambiguous, but not on every page.
 3. **A rendered-text heuristic** — walk candidate result containers and keep
-   the ones holding a price *and*, for travel, two clock times.
+   the ones holding a price. On a known travel site two clock times are also
+   required; on an unrecognized page the price alone qualifies a row, since
+   there is no structure there to lean on.
 
 Nothing keys off a class name alone, because those change weekly. The
 heuristic is deliberately conservative, so a redesign usually means "captured
@@ -117,7 +136,13 @@ fallbacks still apply. Then add the URL pattern to
 - `contextMenus` — the right-click capture item.
 - `storage` — the two staging queues and your saved overrides.
 - `tabs` — to find open planner tabs and push to them.
-- Host permissions — the sites in `matches`, plus the planner origins.
+- `activeTab` + `scripting` — to read the page you are looking at **when you
+  click Capture**, and only then. This is what makes capture universal without
+  requesting access to every site: `activeTab` is granted per invocation, for
+  one tab, and expires. The alternative — an `<all_urls>` content script —
+  would mean running on every page you ever load.
+- Host permissions — the sites with automatic capture, the planner origins, and
+  `localhost:8787` for the optional backend.
 
 Captured data goes to the planner tab (or your clipboard) and nowhere else.
 The extension makes no network requests of its own.

@@ -42,11 +42,35 @@ var TripAgentScrapers = (function () {
     { id: 'db-bahn', kind: 'train', test: /bahn\.de/i, rootSelectors: ['div[class*="reiseloesung"]', 'li[class*="verbindung"]'] },
   ];
 
-  function detectSite(url) {
+  // What kind of thing an unrecognized page is selling. Guessing "flight" for
+  // everything put hotel rows on the wrong side of the planner's cost model,
+  // where a nightly rate is not multiplied by the stay. Read the URL and the
+  // page's own text instead; 'stay' is checked before 'travel' because a hotel
+  // page mentions airports far more often than a flight page mentions rooms.
+  function guessKind(url, doc) {
+    var hay = String(url || '').toLowerCase();
+    try {
+      hay += ' ' + ((doc && doc.title) || '').toLowerCase();
+      var h1 = doc && doc.querySelector ? doc.querySelector('h1') : null;
+      if (h1) hay += ' ' + text(h1).toLowerCase();
+    } catch (e) { /* a detached document — the URL alone will do */ }
+
+    if (/hotel|lodging|accommodation|apartment|airbnb|hostel|resort|room|per.?night|stay/.test(hay)) return 'hotel';
+    if (/train|rail|eurostar|thalys|bahn|renfe|trenitalia|sncf|interrail/.test(hay)) return 'train';
+    if (/\bbus\b|coach|flixbus|megabus/.test(hay)) return 'bus';
+    if (/ferry|cruise/.test(hay)) return 'ferry';
+    if (/flight|airfare|airline|airport|nonstop|departure/.test(hay)) return 'flight';
+    if (/ticket|tour|museum|attraction|admission|excursion|experience/.test(hay)) return 'activity';
+    // Nothing recognizable: 'flight' only because it is the shape with the most
+    // fields, and every field stays optional. The user retags the row anyway.
+    return 'flight';
+  }
+
+  function detectSite(url, doc) {
     for (var i = 0; i < SITES.length; i++) {
       if (SITES[i].test.test(url)) return SITES[i];
     }
-    return { id: 'unknown', kind: 'flight', rootSelectors: [] };
+    return { id: 'unknown', kind: guessKind(url, doc), rootSelectors: [], generic: true };
   }
 
   function text(node) {
@@ -167,7 +191,12 @@ var TripAgentScrapers = (function () {
   function fromHeuristic(doc, site, url) {
     var route = routeFromUrl(url);
     var place = placeFromUrl(url);
-    var wantsTimes = site.kind !== 'hotel';
+    // Known travel sites list departures and arrivals, so requiring two clock
+    // times is what keeps their non-result rows out. An unrecognized page has
+    // no such structure to rely on, so there the price alone has to qualify a
+    // row — otherwise "universal capture" would find nothing outside the
+    // sites already special-cased.
+    var wantsTimes = site.kind !== 'hotel' && !site.generic;
     var offers = [];
     var seen = Object.create(null);
 
@@ -298,7 +327,7 @@ var TripAgentScrapers = (function () {
 
   // ---- Entry point -------------------------------------------------------
   function scrape(doc, url, overrides) {
-    var site = detectSite(url);
+    var site = detectSite(url, doc);
     var offers = fromJsonLd(doc);
     if (BANK_PORTALS.indexOf(site.id) !== -1) {
       // Portals are authenticated app shells and publish no useful JSON-LD,
@@ -326,7 +355,7 @@ var TripAgentScrapers = (function () {
   return {
     scrape: scrape, detectSite: detectSite, routeFromUrl: routeFromUrl,
     placeFromUrl: placeFromUrl, pointsIn: pointsIn, cashPriceIn: cashPriceIn,
-    BANK_PORTALS: BANK_PORTALS,
+    guessKind: guessKind, BANK_PORTALS: BANK_PORTALS,
   };
 })();
 

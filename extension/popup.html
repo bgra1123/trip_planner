@@ -8,7 +8,7 @@
 <body>
   <header>
     <h1>TripAgent Capture</h1>
-    <p class="hint" id="subtitle">Right-click a price on any page to queue it. On supported booking and bank travel portals, results are picked up automatically.</p>
+    <p class="hint" id="subtitle">Works on whatever page you have open — right-click a price, or hit Capture below. Known travel sites are picked up automatically.</p>
   </header>
 
   <!-- Selection captures: free-form text, reviewed by hand -->
@@ -28,6 +28,7 @@
   <!-- Scraped offers: structured rows from a supported site -->
   <section class="section">
     <h2>Scraped offers</h2>
+    <p class="hint">Capture reads the page you're on, whatever site it is.</p>
     <div class="overrides">
       <label>From <input id="from" placeholder="IST" maxlength="4" /></label>
       <label>To <input id="to" placeholder="MUC" maxlength="4" /></label>
@@ -35,7 +36,7 @@
     </div>
     <p class="hint">Overrides fill in what a page URL doesn’t say, and are saved for next time.</p>
     <div id="offers-empty" class="empty" hidden>
-      Nothing scraped yet. Open a flight or hotel search on a supported site.
+      Nothing scraped yet. Open any flight or hotel search and hit <strong>Capture this page</strong>.
     </div>
     <ul id="offer-list"></ul>
     <div class="btn-row">

@@ -39,7 +39,7 @@
     if (reason === 'auto' && signature === lastSignature) return;
     lastSignature = signature;
     lastSentAt = now;
-    var site = TripAgentScrapers.detectSite(location.href);
+    var site = TripAgentScrapers.detectSite(location.href, document);
     chrome.runtime.sendMessage({
       type: 'CAPTURED',
       offers: offers,
@@ -65,7 +65,7 @@
     var offers = capture(message.overrides);
     lastSignature = signatureOf(offers);
     lastSentAt = Date.now();
-    var activeSite = TripAgentScrapers.detectSite(location.href);
+    var activeSite = TripAgentScrapers.detectSite(location.href, document);
     sendResponse({
       offers: offers,
       sourceUrl: location.href,

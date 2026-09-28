@@ -1,12 +1,14 @@
 {
   "manifest_version": 3,
   "name": "TripAgent Capture",
-  "version": "0.2.0",
-  "description": "Capture flight, train and hotel prices from any travel site — by right-clicking a price, or automatically on supported booking and bank travel portals — and send them to your Trip Planner.",
+  "version": "0.3.0",
+  "description": "Capture flight, train and hotel prices from any page — right-click a price, or click Capture on whatever site you have open. Sends them to your Trip Planner.",
   "permissions": [
     "contextMenus",
     "storage",
-    "tabs"
+    "tabs",
+    "activeTab",
+    "scripting"
   ],
   "host_permissions": [
     "http://localhost:3000/*",

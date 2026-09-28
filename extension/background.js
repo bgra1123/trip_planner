@@ -181,6 +181,62 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   await writeCaptures(captures);
 });
 
+// ---- capture on any page -------------------------------------------------
+// Only a handful of sites get a content script declared up front, because that
+// means running on every page load forever. Everywhere else the scraper is
+// injected on demand: opening this popup grants `activeTab` for the tab the
+// user is looking at, which is exactly the scope needed and nothing wider.
+//
+// So capture works on whatever page is open, without the extension asking for
+// permission to read every site the user ever visits.
+async function captureFromTab(tab, overrides) {
+  // A declared content script is already there on the known sites; use it, so
+  // its debounce state and page observation stay intact.
+  try {
+    const reply = await chrome.tabs.sendMessage(tab.id, { type: 'SCRAPE_NOW', overrides });
+    if (reply) return reply;
+  } catch (err) {
+    // No content script in this tab — fall through and inject one.
+  }
+
+  const url = tab.url || '';
+  // Pages no extension may touch, whatever its permissions. Saying which is
+  // more useful than a generic failure the user can only guess at.
+  if (/^(chrome|edge|about|moz-extension|chrome-extension|devtools|view-source):/i.test(url)
+      || /^https:\/\/chromewebstore\.google\.com/i.test(url)
+      || /^https:\/\/chrome\.google\.com\/webstore/i.test(url)) {
+    throw new Error('Chrome blocks extensions on this page. Open the travel site in a normal tab.');
+  }
+
+  try {
+    // Two steps on purpose: the file defines TripAgentScrapers in this
+    // extension's isolated world, and the function below then runs in that
+    // same world, so it can call it.
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['scrapers.js'] });
+    const [injected] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      args: [overrides],
+      func: (opts) => {
+        // eslint-disable-next-line no-undef
+        const scrapers = TripAgentScrapers;
+        const site = scrapers.detectSite(location.href, document);
+        return {
+          offers: scrapers.scrape(document, location.href, opts),
+          site: site.id,
+          kind: site.kind,
+          isBankPortal: scrapers.BANK_PORTALS.indexOf(site.id) !== -1,
+          sourceUrl: location.href,
+        };
+      },
+    });
+    return injected && injected.result ? injected.result : { offers: [] };
+  } catch (err) {
+    // activeTab covers the top frame of the invoked tab; anything else (a
+    // sandboxed frame, a page still loading) lands here.
+    throw new Error(`Couldn't read this page (${err.message}). Right-click a price to capture it by hand.`);
+  }
+}
+
 // ---- message router ------------------------------------------------------
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -239,9 +295,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!tab) { sendResponse({ ok: false, error: 'No active tab.' }); break; }
         let reply;
         try {
-          reply = await chrome.tabs.sendMessage(tab.id, { type: 'SCRAPE_NOW', overrides: message.overrides || {} });
+          reply = await captureFromTab(tab, message.overrides || {});
         } catch (err) {
-          sendResponse({ ok: false, error: 'This page has no TripAgent scraper. Right-click a price to capture it by hand instead.' });
+          sendResponse({ ok: false, error: err.message });
           break;
         }
         const offers = (reply && reply.offers) || [];
@@ -250,7 +306,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await pushToPlanner({ type: 'PUSH_OFFERS', offers });
           if (reply && reply.isBankPortal) await forwardToBackend(reply.site, offers, message.overrides);
         }
-        sendResponse({ ok: true, captured: offers.length, ...result });
+        sendResponse({ ok: true, captured: offers.length, site: reply && reply.site, ...result });
         break;
       }
       case 'SEND_OFFERS_TO_PLANNER': {

@@ -166,7 +166,7 @@
     var tabs = state && state.plannerTabs ? state.plannerTabs : 0;
     $('subtitle').textContent = waiting
       ? waiting + ' item' + (waiting === 1 ? '' : 's') + ' waiting · ' + tabs + ' planner tab' + (tabs === 1 ? '' : 's') + ' open'
-      : 'Right-click a price on any page to queue it. On supported booking and bank travel portals, results are picked up automatically.';
+      : 'Works on whatever page you have open \u2014 right-click a price, or hit Capture below.';
     renderCaptures();
     renderOffers();
   }

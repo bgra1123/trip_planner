@@ -3,21 +3,59 @@
 How the browser extension, the web app and the backend fit together, and
 what the contract between them is.
 
-## Two capture paths
+## Capture works on any page
 
-There is no single mechanism that gets a price out of every travel site, so
-the extension carries two and the app treats them identically:
+No mechanism gets a price out of every travel site, so the extension carries
+two, and the app treats their output identically:
 
 | | Selected prices | Scraped offers |
 |---|---|---|
-| Works on | any page, anywhere | supported booking + bank travel portals |
-| User does | select a price, right-click | nothing, or *Capture this page* |
+| Works on | any page, anywhere | any page, anywhere |
+| User does | select a price, right-click | click *Capture this page* |
 | Produces | a trip-notes line, reviewed by hand | structured route/time/price rows |
-| Breaks when | never | a site redesigns its markup |
+| Breaks when | never | a page has no readable prices |
 
-The first always works and costs a moment of attention. The second costs
-nothing and sometimes stops working. Keeping both means a redesign costs
-convenience, not the ability to capture at all.
+Neither is limited to an allowlist. A short list of travel sites additionally
+gets a **declared content script**, so their results are picked up as they load
+with nothing to click — that is a convenience, not the boundary of what can be
+captured.
+
+### How that stays universal without over-asking
+
+A content script matching `<all_urls>` would run on every page the user ever
+loads, observing the DOM of all of it, forever. Instead capture on an
+unrecognized page is injected on demand:
+
+```
+user clicks the toolbar icon       ─▶ activeTab granted for THAT tab only
+      │
+      ├─ tabs.sendMessage          ─▶ a declared content script answers?  ─▶ use it
+      │                                (known sites keep their debounce state)
+      └─ otherwise
+         scripting.executeScript(files: ['scrapers.js'])   defines the scraper
+         scripting.executeScript(func: …)                  runs it in that world
+```
+
+Both `executeScript` calls land in the same isolated world, which is why the
+second can call what the first defined. `activeTab` is granted per invocation
+and expires, so the extension never holds standing access to a site.
+
+Pages no extension may script — `chrome://`, the Web Store, DevTools — are
+detected by URL and reported as such, because a specific reason is more useful
+than a generic failure.
+
+### Knowing what an unknown page is selling
+
+On a site with an adapter, the kind is known. On any other page it is inferred
+from the URL and title (`guessKind`), because assuming *flight* everywhere put
+nightly hotel rates into the planner as flat fares — a rate is only multiplied
+across the stay for a `stay` row. `stay` is tested before travel keywords, since
+a hotel page mentions airports far more often than a flight page mentions rooms.
+
+The two-clock-times requirement is also relaxed off the known sites: a hotel
+page has prices and no departure times at all, so there a price alone qualifies
+a row. On the known flight sites the stricter rule stays, or their filter and
+navigation chrome would be captured as results.
 
 Selected prices travel as **trip-notes text**, not structured data, and the
 page parses them with the planner's own `linesToRows()`. The extension

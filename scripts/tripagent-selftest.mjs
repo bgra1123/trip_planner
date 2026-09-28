@@ -15,7 +15,10 @@ import {
   offerToRow, offersToRows, offerCostText, rowCostIsParseable, mergeOffers,
   offersFromNotesText, currenciesNeedingRate, offerFromLink,
 } from '../src/utils/tripAgentOffers.js';
-import { groupRows, defaultSelection, buildExportData, parseCost, convertToBase } from '../src/utils/parseTripNotes.js';
+import { groupRows, parseNotes, defaultSelection, buildExportData, parseCost, convertToBase } from '../src/utils/parseTripNotes.js';
+import {
+  HOTEL_CARD_PROGRAMS, detectCardProgram, cardProgramForStay,
+} from '../src/utils/hotelCardBenefits.js';
 import { toOffers, humanDuration } from '../backend/amadeus.mjs';
 import { sampleFlights } from '../backend/sample.mjs';
 import { validateFlightQuery, handleIngest, paramsFromBody } from '../backend/server.mjs';
@@ -154,6 +157,70 @@ check('a per-night capture keeps its unit price', capturedRows[1].costText, '€
 check('and still totals to the whole stay', parseCost(capturedRows[1].costText).low, 420);
 check('a captured route becomes a leg', capturedRows[0].group, 'IST → MUN');
 check('the captured rate answers its own currency', currenciesNeedingRate(captured.offers, captured.rates), []);
+
+// ---- hotel card-program benefits -------------------------------------------
+// A stay's bundled card-program benefits (a credit, a guaranteed checkout, an
+// upgrade chance) come from a small, static, dated table and are shown as a
+// list next to the price — never folded into a single "worth X% more" score.
+// Tagging rides the existing HOTEL: detail text via a `CARD:<marker>` token,
+// so an untagged stay is completely unaffected (strictly additive).
+check('exactly the two verified programs are on file', Object.keys(HOTEL_CARD_PROGRAMS).sort(), ['FHR', 'HOTEL_COLLECTION']);
+ok('the lookup is dated, since terms change without notice',
+  /2026/.test(HOTEL_CARD_PROGRAMS.FHR.capturedAt) && /2026/.test(HOTEL_CARD_PROGRAMS.HOTEL_COLLECTION.capturedAt),
+  `FHR=${HOTEL_CARD_PROGRAMS.FHR.capturedAt} HC=${HOTEL_CARD_PROGRAMS.HOTEL_COLLECTION.capturedAt}`);
+check('FHR benefits are exactly the published list', HOTEL_CARD_PROGRAMS.FHR.benefits, [
+  'Breakfast for two',
+  '$100 credit toward eligible charges',
+  'Guaranteed 4pm checkout',
+  'Noon check-in when available',
+  'Room upgrade when available',
+  'Complimentary wifi',
+]);
+check('Hotel Collection benefits are exactly the published list', HOTEL_CARD_PROGRAMS.HOTEL_COLLECTION.benefits, [
+  '$100 credit toward eligible charges',
+  '4pm late checkout when available',
+  'Noon check-in when available',
+  'Room upgrade when available',
+  'Minimum 2-night stay required',
+]);
+
+check('CARD:FHR resolves to Fine Hotels + Resorts', detectCardProgram('walk to metro, CARD:FHR').code, 'FHR');
+check('CARD:HC resolves to Hotel Collection', detectCardProgram('CARD:HC').code, 'HOTEL_COLLECTION');
+check('the full program name also resolves', detectCardProgram('CARD:Hotel Collection, near station').code, 'HOTEL_COLLECTION');
+ok('no tag means no program, never a guess', detectCardProgram('walk to metro') === null);
+ok('an unrecognized marker is never guessed at', detectCardProgram('CARD:PLATINUM') === null);
+ok('empty/missing text has no program', detectCardProgram('') === null && detectCardProgram(undefined) === null);
+
+check('cardProgramForStay scans label and detail together',
+  cardProgramForStay({ label: 'Family suite', detail: 'walk to metro, CARD:FHR' }).code, 'FHR');
+ok('an untagged stay option has no program', cardProgramForStay({ label: 'Family suite', detail: 'walk to metro' }) === null);
+ok('a stay option with no detail at all has no program', cardProgramForStay({ label: 'Family suite' }) === null);
+ok('a null option has no program', cardProgramForStay(null) === null);
+
+// The marker rides the existing HOTEL: detail grammar — no new field, no new
+// parser — so it survives parseNotes()/groupRows() exactly like any other
+// freeform detail text.
+const cardNotes = parseNotes([
+  'HOTEL: Milan - family room near Duomo, EUR140/night x3, walk to metro, CARD:FHR',
+  'HOTEL: Munich - near Hauptbahnhof, EUR120/night x1, rest stop before train',
+].join('\n'));
+check('two distinct stay groups are parsed', cardNotes.stay.length, 2);
+const taggedStay = cardNotes.stay.find((g) => g.key === 'Milan').options[0];
+const untaggedStay = cardNotes.stay.find((g) => g.key === 'Munich').options[0];
+ok('the CARD: marker survives into the parsed detail', /CARD:FHR/i.test(taggedStay.detail), taggedStay.detail);
+check('the tagged stay resolves to Fine Hotels + Resorts', cardProgramForStay(taggedStay).code, 'FHR');
+// The benefits lookup never touches the price — the per-night cost still
+// expands across the 3-night stay exactly as it would untagged.
+check('the tagged stay\'s price is untouched by the benefits lookup', taggedStay.cost.low, 420);
+check('a stay with no CARD: marker gets no program', cardProgramForStay(untaggedStay), null);
+
+// The same marker survives a captured (extension) offer too, since captures
+// go through the planner's own linesToRows() rather than a separate parser.
+const cardCapture = offersFromNotesText('HOTEL: Rome - suite near Termini, EUR200/night x2, CARD:HC');
+const cardCaptureRow = offerToRow(cardCapture.offers[0], 'cap-card');
+ok('a captured hotel detail still carries the CARD: marker', /CARD:HC/i.test(cardCaptureRow.detail), cardCaptureRow.detail);
+check('the captured stay resolves to Hotel Collection',
+  cardProgramForStay({ label: cardCaptureRow.option, detail: cardCaptureRow.detail }).code, 'HOTEL_COLLECTION');
 
 // ---- save a link as an activity -------------------------------------------
 // A reel/blog link plus the user's own note becomes an activity offer through

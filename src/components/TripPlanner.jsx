@@ -4,6 +4,7 @@ import {
   convertToBase, buildExportData, toMarkdown, deriveRouteChain, DEFAULT_TRIP_NOTES, costTextIssue,
 } from '../utils/parseTripNotes';
 import TripAgentPanel from './TripAgentPanel';
+import { cardProgramForStay } from '../utils/hotelCardBenefits';
 
 function ratesToRows(rates) {
   return Object.entries(rates || {}).map(([code, factor]) => ({ id: newRowId(), code, factor: String(factor) }));
@@ -364,6 +365,9 @@ export default function TripPlanner() {
             (<code className="bg-slate-100 rounded px-1">TRY21000</code>, <code className="bg-slate-100 rounded px-1">$40</code>) —
             add a <code className="bg-slate-100 rounded px-1">RATE: TRY 0.018</code> line (EUR per unit) to convert them, or edit the
             Exchange Rates panel below directly. Costs in a currency with no rate are excluded from totals, with a warning.
+            Add <code className="bg-slate-100 rounded px-1">CARD:FHR</code> or <code className="bg-slate-100 rounded px-1">CARD:HC</code>{' '}
+            to a <code className="bg-slate-100 rounded px-1">HOTEL:</code> line to show that card program's bundled benefits
+            next to the price in the Trip Path below — never combined into the price itself.
           </p>
           <textarea
             value={notesText}
@@ -656,6 +660,11 @@ export default function TripPlanner() {
                   const meta = node.type === 'travel'
                     ? `${picked.time.from || '–'}–${picked.time.to || '–'}`
                     : (picked.cost && picked.cost.nights > 1 ? `${picked.cost.nights} nights` : '');
+                  // A stay tagged with a recognized card program (see
+                  // src/utils/hotelCardBenefits.js) gets its bundled benefits
+                  // shown as a separate list below the price — never folded
+                  // into the price itself or turned into a score.
+                  const cardProgram = node.type === 'stay' ? cardProgramForStay(picked) : null;
                   return (
                     <React.Fragment key={`${node.type}-${node.group.key}`}>
                       <div className="flex-1 min-w-[12rem] max-w-[16rem] bg-white border border-slate-200 rounded-lg shadow-sm p-3 flex flex-col gap-2">
@@ -676,6 +685,17 @@ export default function TripPlanner() {
                           <span className="text-slate-500">{meta}</span>
                           <span className="font-semibold text-slate-900">{costLabel(picked)}</span>
                         </div>
+                        {cardProgram && (
+                          <div className="pt-2 border-t border-slate-100">
+                            <div className="text-[0.65rem] font-semibold text-slate-700 uppercase tracking-wide">
+                              {cardProgram.name} benefits
+                            </div>
+                            <ul className="text-[0.65rem] text-slate-600 list-disc list-inside space-y-0.5 mt-1">
+                              {cardProgram.benefits.map((b) => <li key={b}>{b}</li>)}
+                            </ul>
+                            <div className="text-[0.6rem] text-slate-400 mt-1">{cardProgram.capturedAt} — verify before booking</div>
+                          </div>
+                        )}
                       </div>
                       {i < pathNodes.length - 1 && <div className="flex items-center text-slate-400">→</div>}
                     </React.Fragment>

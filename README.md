@@ -52,6 +52,11 @@ npm start
 
 4. Open [http://localhost:3000](http://localhost:3000) in your browser
 
+Want to plan a real trip with your own captured portal offers? See
+[docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) for the full walkthrough —
+loading the extension, capturing from Capital One/Amex or any site, tagging a
+hotel with its card program, and letting the planner rank the combinations.
+
 ## 📱 Using on iOS (Claude App)
 
 1. Open **Claude** on your iPhone

@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Trip Memory Capture",
+  "version": "0.1.0",
+  "description": "Capture the offer on the current page into your Trip Memory inbox or straight onto a trip node.",
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "permissions": [
+    "scripting",
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": ["http://localhost/*", "https://*.trycloudflare.com/*"]
+}

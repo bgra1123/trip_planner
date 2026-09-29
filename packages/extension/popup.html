@@ -1,0 +1,194 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Trip Memory</title>
+    <style>
+      body {
+        width: 320px;
+        margin: 0;
+        padding: 12px;
+        font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #1e293b;
+      }
+      h1 {
+        font-size: 14px;
+        margin: 0 0 8px;
+      }
+      section {
+        margin-bottom: 12px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid #e2e8f0;
+      }
+      section:last-child {
+        border-bottom: none;
+        margin-bottom: 0;
+      }
+      label {
+        display: block;
+        margin-bottom: 6px;
+      }
+      label span {
+        display: block;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        color: #64748b;
+        margin-bottom: 2px;
+      }
+      input,
+      select {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 5px 6px;
+        border: 1px solid #cbd5e1;
+        border-radius: 4px;
+        font-size: 13px;
+      }
+      .row {
+        display: flex;
+        gap: 6px;
+      }
+      .row > label {
+        flex: 1;
+      }
+      button {
+        width: 100%;
+        padding: 7px;
+        border: none;
+        border-radius: 4px;
+        background: #0f172a;
+        color: white;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: #f1f5f9;
+        color: #0f172a;
+        margin-top: 6px;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .status {
+        margin-top: 8px;
+        font-size: 12px;
+      }
+      .status.error {
+        color: #dc2626;
+      }
+      .status.success {
+        color: #059669;
+      }
+      .badge {
+        display: inline-block;
+        font-size: 10px;
+        padding: 1px 6px;
+        border-radius: 999px;
+        background: #f1f5f9;
+        color: #475569;
+        margin-left: 4px;
+      }
+      details summary {
+        cursor: pointer;
+        color: #64748b;
+        font-size: 11px;
+      }
+      .failure {
+        font-size: 11px;
+        border-top: 1px solid #f1f5f9;
+        padding: 4px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Trip Memory</h1>
+
+    <section id="credentials-section">
+      <label>
+        <span>API base URL</span>
+        <input id="apiBase" value="http://localhost:3000" />
+      </label>
+      <label>
+        <span>Trip ID</span>
+        <input id="tripId" placeholder="trip_..." />
+      </label>
+      <label>
+        <span>Token</span>
+        <input id="token" type="password" placeholder="tmk_..." />
+      </label>
+      <button id="saveCredentials">Save credentials</button>
+      <div id="credentialsStatus" class="status"></div>
+    </section>
+
+    <section id="capture-section">
+      <button id="captureButton">Capture this page</button>
+      <div id="captureStatus" class="status"></div>
+
+      <div id="candidateForm" style="display: none; margin-top: 10px">
+        <span id="adapterBadge" class="badge"></span>
+        <label>
+          <span>Title</span>
+          <input id="title" />
+        </label>
+        <label>
+          <span>Type</span>
+          <select id="type">
+            <option value="accommodation">accommodation</option>
+            <option value="transport">transport</option>
+            <option value="activity">activity</option>
+            <option value="meal">meal</option>
+            <option value="note">note</option>
+          </select>
+        </label>
+        <label>
+          <span>Assign to</span>
+          <select id="assignTo">
+            <option value="">Inbox (unassigned)</option>
+          </select>
+        </label>
+        <div class="row">
+          <label>
+            <span>Amount</span>
+            <input id="amount" type="number" step="0.01" />
+          </label>
+          <label>
+            <span>Currency</span>
+            <input id="currency" maxlength="3" style="text-transform: uppercase" />
+          </label>
+        </div>
+        <div class="row">
+          <label>
+            <span>Starts</span>
+            <input id="startsAt" type="datetime-local" />
+          </label>
+          <label>
+            <span>Ends</span>
+            <input id="endsAt" type="datetime-local" />
+          </label>
+        </div>
+        <label>
+          <span>Place name</span>
+          <input id="placeName" />
+        </label>
+        <label>
+          <span>Place address</span>
+          <input id="placeAddress" />
+        </label>
+        <button id="addButton">Add to Inbox</button>
+        <div id="addStatus" class="status"></div>
+      </div>
+    </section>
+
+    <section id="failures-section">
+      <details>
+        <summary id="failuresSummary">Extraction failures</summary>
+        <div id="failuresList"></div>
+        <button id="clearFailures" class="secondary">Clear</button>
+      </details>
+    </section>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

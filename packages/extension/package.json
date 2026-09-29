@@ -1,0 +1,20 @@
+{
+  "name": "@trip-memory/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@trip-memory/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.280",
+    "esbuild": "^0.24.0",
+    "happy-dom": "^15.11.6",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  }
+}

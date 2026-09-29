@@ -64,6 +64,15 @@ hotel with its card program, and letting the planner rank the combinations.
 3. The app runs interactively with real-time state updates
 4. Adjust controls to optimize your itinerary
 
+## 📲 Add to your iPhone home screen
+
+The app is a installable web app: open it in Safari, tap **Share** →
+**Add to Home Screen**, and it launches full-screen with its own icon, no
+address bar. This works for the planner itself; it does **not** apply to the
+Chrome extension — see [extension/README.md](extension/README.md) for why
+browser extensions can't run on iPhone and what capture looks like there
+instead.
+
 ## 🛠️ Project Structure
 
 ```

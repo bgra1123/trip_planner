@@ -147,6 +147,21 @@ fallbacks still apply. Then add the URL pattern to
 Captured data goes to the planner tab (or your clipboard) and nowhere else.
 The extension makes no network requests of its own.
 
+## On iPhone
+
+Chrome extensions don't run on iOS — not even in Chrome for iPhone, which is
+Safari's engine under the hood and has no extension API. The only real path
+is a **Safari Web Extension**, a separate packaging (via
+`xcrun safari-web-extension-converter`) that requires a Mac with Xcode and
+ships through the App Store, not as an unpacked folder.
+
+Even with that conversion, right-click capture has no iOS equivalent — touch
+screens have no right-click. The planner's own **Add to Home Screen**
+install (see the main [README](../README.md#-add-to-your-iphone-home-screen))
+covers the everything-but-capture experience today; capturing portal offers
+on iPhone still means using a laptop for that step, or typing the offer by
+hand into the planner's notes.
+
 ## Pointing at a different planner URL
 
 Deployed elsewhere? Add the origin in two places in `manifest.json`

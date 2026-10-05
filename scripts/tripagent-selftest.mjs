@@ -13,7 +13,7 @@
 import {
   normalizeTime, normalizePrice, normalizeOffer, normalizeOffers,
   offerToRow, offersToRows, offerCostText, rowCostIsParseable, mergeOffers,
-  offersFromNotesText, currenciesNeedingRate, offerFromLink,
+  offersFromNotesText, currenciesNeedingRate, offerFromLink, rowFromQuickEntry,
 } from '../src/utils/tripAgentOffers.js';
 import { groupRows, parseNotes, defaultSelection, buildExportData, parseCost, convertToBase } from '../src/utils/parseTripNotes.js';
 import {
@@ -251,6 +251,28 @@ check('the row carries no fabricated cost', linkedRow.costText, '');
 ok('a link with no note is refused', offerFromLink('https://example.com/x', '   ') === null);
 ok('a note with no link is refused', offerFromLink('  ', 'Nice view') === null);
 ok('two blanks are refused', offerFromLink('', '') === null);
+
+// ---- quick price entry (a price read off an internal system, hand-typed) -
+const quickFlight = rowFromQuickEntry({
+  category: 'travel', group: 'IST → MUN', option: '07:25 departure',
+  time: '07:25-09:40', cost: '€245', window: '14-19 Aug',
+});
+check('a hand-typed flight keeps the route', quickFlight.group, 'IST → MUN');
+check('a hand-typed flight keeps the option label', quickFlight.option, '07:25 departure');
+check('a hand-typed flight cost parses back', [parseCost(quickFlight.costText).low, parseCost(quickFlight.costText).currency], [245, 'EUR']);
+ok('a hand-typed flight cost is parseable', rowCostIsParseable(quickFlight));
+check('a hand-typed flight keeps its window', quickFlight.window, '14-19 Aug');
+
+const quickStay = rowFromQuickEntry({ category: 'stay', group: 'Milan', cost: '$180' });
+check('a hand-typed stay with no option label gets a sensible fallback', quickStay.option, 'Milan option');
+check('a hand-typed stay keeps a non-euro price faithfully', quickStay.costText, '$180');
+
+const quickActivity = rowFromQuickEntry({ category: 'activity', option: 'City tour', cost: 'free' });
+check('a hand-typed activity carries no group (activities never group)', quickActivity.group, '');
+
+ok('an empty quick-entry submit builds nothing', rowFromQuickEntry({ category: 'travel' }) === null);
+ok('whitespace-only fields are the same as empty', rowFromQuickEntry({ category: 'travel', group: '  ', option: ' ', cost: '  ' }) === null);
+ok('an unknown category falls back to travel rather than crashing', rowFromQuickEntry({ category: 'nonsense', cost: '€1' }).category === 'travel');
 
 // ---- dedupe --------------------------------------------------------------
 const dupA = normalizeOffer({ kind: 'flight', from: 'IST', to: 'MUC', departure: '06:45', price: '€2100', carrier: 'TK' });

@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import useTripAgent from '../hooks/useTripAgent.js';
-import { offerCostText, rowCostIsParseable, offerPreviewRow, currenciesNeedingRate, offerFromLink, offerToRow, categoryForKind } from '../utils/tripAgentOffers.js';
+import { offerCostText, rowCostIsParseable, offerPreviewRow, currenciesNeedingRate, offerFromLink, offerToRow, categoryForKind, rowFromQuickEntry } from '../utils/tripAgentOffers.js';
+import { costTextIssue } from '../utils/parseTripNotes.js';
+
+const CATEGORY_WHERE_LABEL = { travel: 'Route', stay: 'Place', activity: null };
+const CATEGORY_WHERE_PLACEHOLDER = { travel: 'IST → MUN', stay: 'Milan' };
 
 const KIND_BADGE = {
   flight: 'bg-blue-100 text-blue-700',
@@ -36,6 +40,25 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
     if (groupOverrides[offer.id] !== undefined) return groupOverrides[offer.id];
     return offer.group || soleExistingStayGroup;
   }
+
+  // A price read off an internal system (a card's travel portal, a quote
+  // email, anything the extension cannot reach) — typed straight in, added
+  // immediately, no staging step, same as "Save a link as an activity".
+  // Category/route/window are kept after each add rather than cleared,
+  // since the realistic case is entering several options for the same leg
+  // one after another (three flight times quoted on one portal page, say).
+  const [quickForm, setQuickForm] = useState({ category: 'travel', group: '', option: '', time: '', cost: '', window: defaultWindow });
+  function setQuickField(field, value) {
+    setQuickForm((f) => ({ ...f, [field]: value }));
+  }
+  function handleQuickAdd(e) {
+    e.preventDefault();
+    const row = rowFromQuickEntry(quickForm);
+    if (!row) return;
+    if (onAddRows) onAddRows([row]);
+    setQuickForm((f) => ({ ...f, option: '', time: '', cost: '' }));
+  }
+  const quickCostIssue = quickForm.cost.trim() ? costTextIssue(quickForm.cost) : null;
 
   function setField(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -107,6 +130,97 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
           <p className="text-xs text-slate-500 mb-3">
             Offers captured by the browser extension or fetched from the backend land here first. Nothing reaches
             your table until you add it, so a bad scrape can never rewrite a plan you are working on.
+          </p>
+
+          {/* Type in a price — for anything the extension cannot reach: a
+              bank portal's own page, a quote by email, a price read over the
+              phone. Added straight to the table, same as "Save a link as an
+              activity" — typing it already is the review step. Category,
+              route and window stay filled in after each add, since entering
+              a few options off one portal page is the realistic case. */}
+          <form onSubmit={handleQuickAdd} className="flex flex-wrap items-end gap-2 mb-2 pb-3 border-b border-slate-100">
+            <label className="text-[0.65rem] uppercase tracking-wide text-slate-500">
+              <span className="block mb-1">Kind</span>
+              <select
+                value={quickForm.category}
+                onChange={(e) => setQuickField('category', e.target.value)}
+                className="text-xs font-mono px-1.5 py-1.5 rounded border border-slate-300"
+              >
+                <option value="travel">Travel</option>
+                <option value="stay">Stay</option>
+                <option value="activity">Activity</option>
+              </select>
+            </label>
+            {CATEGORY_WHERE_LABEL[quickForm.category] && (
+              <label className="text-[0.65rem] uppercase tracking-wide text-slate-500">
+                <span className="block mb-1">{CATEGORY_WHERE_LABEL[quickForm.category]}</span>
+                <input
+                  type="text"
+                  list={quickForm.category === 'stay' ? 'tripagent-existing-stay-groups' : undefined}
+                  value={quickForm.group}
+                  onChange={(e) => setQuickField('group', e.target.value)}
+                  placeholder={CATEGORY_WHERE_PLACEHOLDER[quickForm.category]}
+                  className="w-28 font-mono text-xs px-2 py-1.5 rounded border border-slate-300 focus:border-blue-400 focus:outline-none normal-case"
+                />
+              </label>
+            )}
+            <label className="text-[0.65rem] uppercase tracking-wide text-slate-500">
+              <span className="block mb-1">Option</span>
+              <input
+                type="text"
+                value={quickForm.option}
+                onChange={(e) => setQuickField('option', e.target.value)}
+                placeholder={quickForm.category === 'stay' ? 'Family room' : (quickForm.category === 'activity' ? 'City tour' : '07:25 departure')}
+                className="w-32 text-xs px-2 py-1.5 rounded border border-slate-300 focus:border-blue-400 focus:outline-none normal-case"
+              />
+            </label>
+            {quickForm.category !== 'activity' && (
+              <label className="text-[0.65rem] uppercase tracking-wide text-slate-500">
+                <span className="block mb-1">Time</span>
+                <input
+                  type="text"
+                  value={quickForm.time}
+                  onChange={(e) => setQuickField('time', e.target.value)}
+                  placeholder="07:25-09:40"
+                  className="w-24 font-mono text-xs px-2 py-1.5 rounded border border-slate-300 focus:border-blue-400 focus:outline-none normal-case"
+                />
+              </label>
+            )}
+            <label className="text-[0.65rem] uppercase tracking-wide text-slate-500">
+              <span className="block mb-1">Price</span>
+              <input
+                type="text"
+                value={quickForm.cost}
+                onChange={(e) => setQuickField('cost', e.target.value)}
+                placeholder="€245 or free"
+                title={quickCostIssue ? 'Not recognized as a price — it will still be added, flagged for you to fix' : undefined}
+                className={`w-24 font-mono text-xs px-2 py-1.5 rounded border focus:outline-none normal-case ${
+                  quickCostIssue ? 'border-red-300 bg-red-50' : 'border-slate-300 focus:border-blue-400'
+                }`}
+              />
+            </label>
+            <label className="text-[0.65rem] uppercase tracking-wide text-slate-500">
+              <span className="block mb-1">Window</span>
+              <input
+                type="text"
+                value={quickForm.window}
+                onChange={(e) => setQuickField('window', e.target.value)}
+                placeholder="14-19 Aug"
+                className="w-24 font-mono text-xs px-2 py-1.5 rounded border border-slate-300 focus:border-blue-400 focus:outline-none normal-case"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={!quickForm.option.trim() && !quickForm.group.trim() && !quickForm.cost.trim()}
+              className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:bg-slate-300"
+            >
+              Add to table
+            </button>
+          </form>
+          <p className="text-xs text-slate-500 mb-3">
+            Got a price from your own card portal, an email quote, or anywhere else the extension cannot reach?
+            Type it straight in — it's added to the table immediately, exactly like any other row, and you can
+            keep entering more options for the same {quickForm.category === 'stay' ? 'stay' : 'leg'} right after.
           </p>
 
           {/* Save a link as an activity — a reel, a blog post, a listing, plus

@@ -404,6 +404,31 @@ export function offerFromLink(url, note, defaults = {}) {
   }, { source: defaults.source || 'link' });
 }
 
+// A price the user read off their own internal system (a card's travel
+// portal, a quote email, anything the extension cannot reach) typed straight
+// into a row — the same shape a scraped offer becomes, built directly rather
+// than routed through normalizeOffer's scraper-shaped field guessing, since
+// there is no raw payload here, only what the user already typed by hand.
+// Returns null when there is nothing worth adding (no group/option AND no
+// price), so an empty form submit never creates a blank row.
+export function rowFromQuickEntry(fields = {}) {
+  const category = ['travel', 'stay', 'activity'].includes(fields.category) ? fields.category : 'travel';
+  const group = category === 'activity' ? '' : clean(fields.group);
+  const option = clean(fields.option);
+  const costText = clean(fields.cost);
+  if (!group && !option && !costText) return null;
+  return {
+    id: newRowId(),
+    category,
+    group,
+    option: option || (group ? `${group} option` : 'Captured option'),
+    timeText: clean(fields.time),
+    costText,
+    detail: clean(fields.detail),
+    window: clean(fields.window),
+  };
+}
+
 // Merge incoming offers into the captured list, newest first, keeping at
 // most `limit` and collapsing re-captures of the same offer.
 export function mergeOffers(existing, incoming, limit = 100) {

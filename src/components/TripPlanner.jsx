@@ -343,7 +343,7 @@ export default function TripPlanner() {
         {/* TripAgent capture (extension + backend) — outside the edit panel
             on purpose: an offer can arrive while the data-entry tools are
             collapsed, and its "N waiting" badge has to stay visible. */}
-        <TripAgentPanel onAddRows={appendRows} rates={rates} />
+        <TripAgentPanel onAddRows={appendRows} rates={rates} existingStayGroups={parsed.stay.map((g) => g.key)} />
 
         {effectiveEditOpen && (
         <>
@@ -363,8 +363,11 @@ export default function TripPlanner() {
             with a date range — combinations will never mix options from different windows;{' '}
             <code className="bg-slate-100 rounded px-1">WINDOW:</code> alone clears it. Costs can use other currencies
             (<code className="bg-slate-100 rounded px-1">TRY21000</code>, <code className="bg-slate-100 rounded px-1">$40</code>) —
-            add a <code className="bg-slate-100 rounded px-1">RATE: TRY 0.018</code> line (EUR per unit) to convert them, or edit the
-            Exchange Rates panel below directly. Costs in a currency with no rate are excluded from totals, with a warning.
+            add a rate for them in the <strong>Exchange Rates</strong> panel below (a{' '}
+            <code className="bg-slate-100 rounded px-1">RATE: TRY 0.018</code> line here works too, but only if you are
+            about to click “Convert notes to table” anyway — that button replaces every row below with what is typed
+            here, so it is the wrong way to add a rate once you have rows from elsewhere). Costs in a currency with
+            no rate are excluded from totals, with a warning.
             Add <code className="bg-slate-100 rounded px-1">CARD:FHR</code> or <code className="bg-slate-100 rounded px-1">CARD:HC</code>{' '}
             to a <code className="bg-slate-100 rounded px-1">HOTEL:</code> line to show that card program's bundled benefits
             next to the price in the Trip Path below — never combined into the price itself.
@@ -389,6 +392,16 @@ export default function TripPlanner() {
               className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 hover:border-blue-500"
             >
               Load example trip
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (rows.length && !window.confirm('Clear every row and start a blank trip? This cannot be undone.')) return;
+                setNotesText(''); setRows([]); setNotes([]); setRateRows([]); setSelection({ travel: {}, stay: {}, activity: {} }); setActiveWindow(null);
+              }}
+              className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 hover:border-red-400"
+            >
+              Start a new trip
             </button>
           </div>
           <p className="text-xs text-slate-500 mt-2">Converting replaces the table below — edit rows directly afterward to fix any transcription mistakes.</p>
@@ -527,7 +540,7 @@ export default function TripPlanner() {
                           className={inputCls}
                           value={row.group}
                           onChange={(e) => updateRow(row.id, 'group', e.target.value)}
-                          placeholder={row.category === 'activity' ? 'n/a' : 'IST → MUN'}
+                          placeholder={row.category === 'activity' ? 'n/a' : (row.category === 'stay' ? 'Milan' : 'IST → MUN')}
                           disabled={row.category === 'activity'}
                         />
                       </td>

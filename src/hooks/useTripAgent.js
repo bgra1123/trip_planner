@@ -79,9 +79,17 @@ export default function useTripAgent() {
   // an offer cannot be added to the table twice by a double click. Rows are
   // built from the rendered `offers` (not inside the state updater, which
   // React may run later or twice) and the removal is a separate update.
-  const takeRowsFor = useCallback((ids) => {
+  //
+  // `groupOverrides` ({id: group}) lets the panel apply a group the user
+  // picked or confirmed for a stay whose capture had none — without this, a
+  // hotel captured from a page with no parseable place silently becomes its
+  // own disconnected itinerary leg instead of an alternative to compare.
+  const takeRowsFor = useCallback((ids, groupOverrides = {}) => {
     const wanted = new Set(ids);
-    const rows = offersToRows(offers.filter((o) => wanted.has(o.id)));
+    const picked = offers
+      .filter((o) => wanted.has(o.id))
+      .map((o) => (groupOverrides[o.id] !== undefined ? { ...o, group: groupOverrides[o.id] } : o));
+    const rows = offersToRows(picked);
     setOffers((prev) => prev.filter((o) => !wanted.has(o.id)));
     return rows;
   }, [offers]);

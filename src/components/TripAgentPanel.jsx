@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import useTripAgent from '../hooks/useTripAgent.js';
-import { offerCostText, rowCostIsParseable, offerPreviewRow, currenciesNeedingRate, offerFromLink, offerToRow } from '../utils/tripAgentOffers.js';
+import { offerCostText, rowCostIsParseable, offerPreviewRow, currenciesNeedingRate, offerFromLink, offerToRow, categoryForKind } from '../utils/tripAgentOffers.js';
 
 const KIND_BADGE = {
   flight: 'bg-blue-100 text-blue-700',
@@ -19,11 +19,23 @@ function priceLabel(offer) {
   return 'no price';
 }
 
-export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = {} }) {
+export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = {}, existingStayGroups = [] }) {
   const { offers, capturedRates, extension, search, runFlightSearch, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor } = useTripAgent();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ from: '', to: '', date: '', adults: '1', currency: 'EUR', window: defaultWindow });
   const [linkForm, setLinkForm] = useState({ url: '', note: '' });
+  // A stay captured from a page with no parseable place arrives with an
+  // empty group — left alone it becomes its own disconnected itinerary leg
+  // instead of an alternative to compare (see rowGroupKey in TripPlanner).
+  // When there is exactly one existing stay to compare against, default to
+  // it; the field stays editable either way, before anything is added.
+  const [groupOverrides, setGroupOverrides] = useState({});
+  const soleExistingStayGroup = existingStayGroups.length === 1 ? existingStayGroups[0] : '';
+
+  function groupFor(offer) {
+    if (groupOverrides[offer.id] !== undefined) return groupOverrides[offer.id];
+    return offer.group || soleExistingStayGroup;
+  }
 
   function setField(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -50,7 +62,12 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
   }
 
   function addOffers(ids) {
-    const rows = takeRowsFor(ids);
+    const overrides = {};
+    ids.forEach((id) => {
+      const offer = offers.find((o) => o.id === id);
+      if (offer && categoryForKind(offer.kind) === 'stay') overrides[id] = groupFor(offer);
+    });
+    const rows = takeRowsFor(ids, overrides);
     if (rows.length && onAddRows) onAddRows(rows);
   }
 
@@ -84,6 +101,9 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
 
       {open && (
         <div className="px-4 pb-4 border-t border-slate-100 pt-3">
+          <datalist id="tripagent-existing-stay-groups">
+            {existingStayGroups.map((g) => <option key={g} value={g} />)}
+          </datalist>
           <p className="text-xs text-slate-500 mb-3">
             Offers captured by the browser extension or fetched from the backend land here first. Nothing reaches
             your table until you add it, so a bad scrape can never rewrite a plan you are working on.
@@ -210,7 +230,26 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
                           <td className="px-2 py-1.5">
                             <span className={`text-[0.65rem] px-1.5 py-0.5 rounded-full ${KIND_BADGE[o.kind] || 'bg-slate-100 text-slate-600'}`}>{o.kind}</span>
                           </td>
-                          <td className="px-2 py-1.5 font-mono text-slate-700">{o.group || '—'}</td>
+                          <td className="px-2 py-1.5 font-mono text-slate-700">
+                            {categoryForKind(o.kind) === 'stay' ? (
+                              <>
+                                <input
+                                  type="text"
+                                  list="tripagent-existing-stay-groups"
+                                  value={groupFor(o)}
+                                  onChange={(e) => setGroupOverrides((m) => ({ ...m, [o.id]: e.target.value }))}
+                                  placeholder="e.g. Milan"
+                                  title="Which stay is this an alternative for? Pick an existing one from the list, or type a new city if this is really a different stop. Left blank, it becomes its own separate leg of the trip."
+                                  className={`w-24 px-1 py-0.5 rounded border focus:outline-none normal-case ${
+                                    groupFor(o) ? 'border-transparent hover:border-slate-200 focus:border-blue-400' : 'border-amber-300 bg-amber-50'
+                                  }`}
+                                />
+                                {!groupFor(o) && existingStayGroups.length > 1 && (
+                                  <div className="text-[0.6rem] text-amber-700 mt-0.5">pick a stay above, or it adds as a new one</div>
+                                )}
+                              </>
+                            ) : (o.group || '—')}
+                          </td>
                           <td className="px-2 py-1.5 text-slate-900">{row.option}</td>
                           <td className="px-2 py-1.5 font-mono text-slate-700">{row.timeText || '—'}</td>
                           <td className={`px-2 py-1.5 font-mono ${rowCostIsParseable(row) ? 'text-slate-900' : 'text-amber-700'}`}>{priceLabel(o)}</td>
@@ -238,8 +277,9 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
               {missingRates.length > 0 && (
                 <p className="text-xs text-amber-700 mt-2 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
                   ⚠️ No conversion rate for {missingRates.join(', ')}. These prices are captured correctly, but stay
-                  out of your totals until you add a <code className="bg-amber-100 rounded px-1">RATE: {missingRates[0]} 0.0181</code>{' '}
-                  line under “Edit trip data”.
+                  out of your totals until you add one: open <strong>Edit trip data</strong>, then under{' '}
+                  <strong>Exchange Rates</strong> click <code className="bg-amber-100 rounded px-1">+ Add rate</code> —
+                  it only adds the rate, nothing else on your table changes.
                 </p>
               )}
               <div className="flex items-center justify-between gap-3 flex-wrap mt-3">

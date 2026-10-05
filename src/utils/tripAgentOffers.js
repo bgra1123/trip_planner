@@ -159,9 +159,15 @@ function hash(text) {
 // (a reload, a second tab, backend + extension both reporting it) collapses
 // to one entry, while a genuinely different price or time does not.
 export function offerKey(offer) {
+  // A stay's real identity is its name: two strategies scraping the same
+  // page (JSON-LD vs. the text heuristic, say) can disagree on whether a
+  // place was parseable, landing the same hotel under group "Milan" from one
+  // and "" from the other. Keying stays on label instead collapses that
+  // duplicate; travel keeps group, since the route genuinely is its identity.
+  const identity = categoryForKind(offer.kind) === 'stay' ? (offer.label || offer.group) : offer.group;
   return [
     offer.kind,
-    offer.group,
+    identity,
     offer.departure || '',
     offer.arrival || '',
     offer.carrier || '',
@@ -203,7 +209,12 @@ export function normalizeOffer(raw, defaults = {}) {
     departure,
     arrival,
     duration: clean(raw.duration),
-    stops: Number.isFinite(Number(raw.stops)) ? Number(raw.stops) : null,
+    // raw.stops is null/undefined whenever a stop count does not apply (any
+    // non-flight capture, or a flight page with no stops text) — Number(null)
+    // is 0, so coercing blindly turned "not applicable" into "nonstop".
+    stops: raw.stops === null || raw.stops === undefined || raw.stops === ''
+      ? null
+      : (Number.isFinite(Number(raw.stops)) ? Number(raw.stops) : null),
     price,
     perNight: !!(raw.perNight || raw.pricePerNight),
     nights,
@@ -256,8 +267,12 @@ function offerDetail(offer) {
   const bits = [];
   if (offer.detail) bits.push(offer.detail);
   if (offer.duration) bits.push(offer.duration);
-  if (offer.stops === 0) bits.push('nonstop');
-  else if (offer.stops > 0) bits.push(`${offer.stops} stop${offer.stops === 1 ? '' : 's'}`);
+  // "Stops" only means anything for travel — a stay or activity with a
+  // leftover stops value of 0 is "not applicable", not "nonstop".
+  if (offer.category === 'travel') {
+    if (offer.stops === 0) bits.push('nonstop');
+    else if (offer.stops > 0) bits.push(`${offer.stops} stop${offer.stops === 1 ? '' : 's'}`);
+  }
   // An unrepresentable currency would otherwise vanish: keep the number the
   // scraper actually saw, flagged so it is obvious it needs a manual entry.
   if (offer.price && !CURRENCY_SYMBOL[offer.price.currency]) {

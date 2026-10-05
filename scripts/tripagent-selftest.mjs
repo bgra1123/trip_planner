@@ -95,6 +95,13 @@ check('hotel per-night shorthand', hotelRow.costText, '€140/night x3');
 // assertion that catches a per-night price being totalled as a flat one.
 check('hotel cost expands to 3 nights', parseCost(hotelRow.costText).low, 420);
 
+// Regression: Number(null) === 0, so a hotel capture (which has no stops
+// field at all) was silently mislabeled "nonstop" once that coercion ran.
+check('a hotel with no stops field normalizes to null, not 0', hotel.stops, null);
+ok('a hotel detail never claims "nonstop"', !hotelRow.detail.includes('nonstop'), hotelRow.detail);
+const nonstopFlight = normalizeOffer({ kind: 'flight', from: 'IST', to: 'MUC', price: '€100', stops: 0 });
+ok('a flight with a real zero-stops still reads nonstop', offerToRow(nonstopFlight, 'row-ns').detail.includes('nonstop'));
+
 const train = normalizeOffer({ kind: 'train', from: 'MUN', to: 'MILAN', price: { low: 250, high: 350, currency: 'EUR' } });
 check('train range shorthand', offerCostText(train), '€250-350');
 check('train range parses back', [parseCost(offerCostText(train)).low, parseCost(offerCostText(train)).high], [250, 350]);
@@ -251,6 +258,17 @@ const dupB = normalizeOffer({ kind: 'flight', from: 'IST', to: 'MUC', departure:
 const different = normalizeOffer({ kind: 'flight', from: 'IST', to: 'MUC', departure: '09:15', price: '€2800', carrier: 'LH' });
 check('mergeOffers collapses a re-capture', mergeOffers([dupA], [dupB, different]).length, 2);
 check('mergeOffers caps the list', mergeOffers([], [dupA, different], 1).length, 1);
+
+// Regression: the same hotel captured once via JSON-LD (which resolved a
+// place) and once via the text heuristic (which could not) used to land as
+// two offers, since the dedupe key included the mismatched group.
+const hotelViaJsonLd = normalizeOffer({ kind: 'hotel', place: 'Milan', label: 'Hotel Milano Scala', price: { amount: 220, currency: 'EUR' }, perNight: true });
+const hotelViaHeuristic = normalizeOffer({ kind: 'hotel', label: 'Hotel Milano Scala', price: '€220', perNight: true });
+check('a stay dedupes on name even when group parsing disagreed',
+  mergeOffers([], [hotelViaJsonLd, hotelViaHeuristic]).length, 1);
+const differentHotel = normalizeOffer({ kind: 'hotel', label: 'Hotel Lombardia', price: '€165', perNight: true });
+check('a genuinely different stay is not collapsed',
+  mergeOffers([], [hotelViaJsonLd, differentHotel]).length, 2);
 
 // ---- backend mapping -----------------------------------------------------
 check('humanDuration', humanDuration('PT7H20M'), '7h 20m');

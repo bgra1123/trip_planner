@@ -76,3 +76,36 @@ export function requestCapturedOffers() {
 export function clearExtensionOffers() {
   postToExtension('CLEAR_OFFERS');
 }
+
+// iPhone has no extension system at all (not even in "Chrome" there — see
+// docs/BOOKMARKLET.md), so a real extension can never reach the page there.
+// The bookmarklet is the mobile substitute: it runs the same scraper against
+// whatever page is open, then opens the planner with the result base64'd
+// into the URL hash, since there is no content-script channel to post
+// through. This reads that once on load and re-posts it as a normal
+// extension envelope, so staging, normalization and dedupe all go through
+// the one path above rather than a second one that could drift from it.
+export function consumeBookmarkletCapture() {
+  if (typeof window === 'undefined') return;
+  const match = (window.location.hash || '').match(/(?:^#|[&])capture=([^&]+)/);
+  if (!match) return;
+  // Strip it immediately — a reload or a shared link must never replay it.
+  window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  let payload;
+  try {
+    const json = decodeURIComponent(escape(atob(decodeURIComponent(match[1]))));
+    payload = JSON.parse(json);
+  } catch (err) {
+    console.warn('[TripAgent] could not read the bookmarklet capture:', err);
+    return;
+  }
+  if (!payload || !Array.isArray(payload.offers) || !payload.offers.length) return;
+  window.postMessage({
+    source: MSG_FROM_EXTENSION,
+    protocol: OFFER_PROTOCOL,
+    type: 'OFFERS',
+    offers: payload.offers,
+    sourceUrl: payload.sourceUrl || '',
+    captureSource: payload.site || 'bookmarklet',
+  }, window.location.origin);
+}

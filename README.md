@@ -68,10 +68,18 @@ hotel with its card program, and letting the planner rank the combinations.
 
 The app is a installable web app: open it in Safari, tap **Share** →
 **Add to Home Screen**, and it launches full-screen with its own icon, no
-address bar. This works for the planner itself; it does **not** apply to the
-Chrome extension — see [extension/README.md](extension/README.md) for why
-browser extensions can't run on iPhone and what capture looks like there
-instead.
+address bar.
+
+## 📌 Capturing prices on iPhone
+
+The browser extension can't run on iPhone at all — no iOS browser, Chrome
+included, supports extensions (Apple requires them all to run on Safari's
+engine). The substitute is a **bookmarklet**: a Safari bookmark that runs the
+same scraper the extension uses, then opens the planner with the result
+ready to review. Open **`/capture.html`** on the deployed site for the
+one-time install steps. See [docs/BOOKMARKLET.md](docs/BOOKMARKLET.md) for
+how it works and [extension/README.md](extension/README.md) for why real
+extensions can't make the trip.
 
 ## 🛠️ Project Structure
 

@@ -319,7 +319,8 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
           {offers.length === 0 ? (
             <p className="text-xs text-slate-500 italic">
               Nothing captured yet. Install the extension from <code className="bg-slate-100 rounded px-1">extension/</code>, then
-              browse a flight or hotel search — or run a backend search above.
+              browse a flight or hotel search — or run a backend search above. On iPhone, the extension
+              can't run at all (no browser there supports one) — use the <a href="./capture.html" className="text-blue-600 underline not-italic">capture bookmarklet</a> instead.
             </p>
           ) : (
             <>

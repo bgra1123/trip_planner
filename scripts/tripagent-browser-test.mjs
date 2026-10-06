@@ -111,6 +111,33 @@ record('a NOTES envelope is parsed and staged', /Add all 3 to table/.test(afterN
 const notesBody = await page.locator('body').innerText();
 record('a captured lira fare keeps its currency', /\u20ba38000|₺38000/.test(notesBody));
 
+// The third capture path: iPhone has no extension system at all (not even
+// in "Chrome" there — see docs/BOOKMARKLET.md), so a bookmarklet carries a
+// capture in the URL hash instead of a postMessage, opened as a fresh tab
+// (window.open), not a same-tab hash change — a genuinely new page load, so
+// this uses its own page/tab rather than navigating the shared one above
+// (a hash-only change on the same document would not remount anything, and
+// would also disturb every later assertion that depends on its state).
+const bookmarkletOffer = {
+  kind: 'hotel', place: 'Zurich', label: 'Lakeview room',
+  price: { amount: 310, currency: 'EUR' }, perNight: true,
+};
+const bookmarkletPayload = JSON.stringify({ offers: [bookmarkletOffer], sourceUrl: 'https://example-portal.test/hotel', site: 'unknown' });
+const bookmarkletHash = `capture=${encodeURIComponent(Buffer.from(bookmarkletPayload, 'utf8').toString('base64'))}`;
+const bookmarkletPage = await browser.newPage();
+await bookmarkletPage.goto(`${BASE}#${bookmarkletHash}`, { waitUntil: 'networkidle', timeout: 20_000 });
+await bookmarkletPage.waitForTimeout(400);
+record('a bookmarklet capture hash is cleared from the URL once consumed',
+  (await bookmarkletPage.evaluate(() => window.location.hash)) === '');
+await bookmarkletPage.getByRole('button', { name: /TripAgent capture/i }).click();
+const bookmarkletAddAll = () => bookmarkletPage.getByRole('button', { name: /Add all \d+ to table/ });
+const afterBookmarklet = (await bookmarkletAddAll().count()) ? await bookmarkletAddAll().innerText() : '(nothing staged)';
+record('a bookmarklet capture is staged, same as a real extension capture',
+  /Add all 1 to table/.test(afterBookmarklet), afterBookmarklet);
+record('the bookmarklet-captured offer is the real one, not a placeholder',
+  /Lakeview room/.test(await bookmarkletPage.locator('body').innerText()));
+await bookmarkletPage.close();
+
 // Envelopes that fail any part of the contract must be dropped silently.
 await page.evaluate(() => {
   const origin = window.location.origin;

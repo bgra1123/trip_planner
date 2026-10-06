@@ -156,11 +156,14 @@ is a **Safari Web Extension**, a separate packaging (via
 ships through the App Store, not as an unpacked folder.
 
 Even with that conversion, right-click capture has no iOS equivalent — touch
-screens have no right-click. The planner's own **Add to Home Screen**
-install (see the main [README](../README.md#-add-to-your-iphone-home-screen))
-covers the everything-but-capture experience today; capturing portal offers
-on iPhone still means using a laptop for that step, or typing the offer by
-hand into the planner's notes.
+screens have no right-click, and there's no automatic capture-on-page-load
+either (a bookmarklet only runs when tapped). The real substitute is the
+**capture bookmarklet** — open `/capture.html` on the deployed site — which
+runs the same `scrapers.js` against whatever page is open in Safari and
+hands the result to the planner. See
+[docs/BOOKMARKLET.md](../docs/BOOKMARKLET.md) for how it works. Falling
+back to the planner's **Quick Add** form (type the price in by hand) always
+works too, on any device.
 
 ## Pointing at a different planner URL
 

@@ -1,0 +1,339 @@
+# TripAgent Integration
+
+How the browser extension, the web app and the backend fit together, and
+what the contract between them is.
+
+## Capture works on any page
+
+No mechanism gets a price out of every travel site, so the extension carries
+two, and the app treats their output identically:
+
+| | Selected prices | Scraped offers |
+|---|---|---|
+| Works on | any page, anywhere | any page, anywhere |
+| User does | select a price, right-click | click *Capture this page* |
+| Produces | a trip-notes line, reviewed by hand | structured route/time/price rows |
+| Breaks when | never | a page has no readable prices |
+
+Neither is limited to an allowlist. A short list of travel sites additionally
+gets a **declared content script**, so their results are picked up as they load
+with nothing to click — that is a convenience, not the boundary of what can be
+captured.
+
+### How that stays universal without over-asking
+
+A content script matching `<all_urls>` would run on every page the user ever
+loads, observing the DOM of all of it, forever. Instead capture on an
+unrecognized page is injected on demand:
+
+```
+user clicks the toolbar icon       ─▶ activeTab granted for THAT tab only
+      │
+      ├─ tabs.sendMessage          ─▶ a declared content script answers?  ─▶ use it
+      │                                (known sites keep their debounce state)
+      └─ otherwise
+         scripting.executeScript(files: ['scrapers.js'])   defines the scraper
+         scripting.executeScript(func: …)                  runs it in that world
+```
+
+Both `executeScript` calls land in the same isolated world, which is why the
+second can call what the first defined. `activeTab` is granted per invocation
+and expires, so the extension never holds standing access to a site.
+
+Pages no extension may script — `chrome://`, the Web Store, DevTools — are
+detected by URL and reported as such, because a specific reason is more useful
+than a generic failure.
+
+### Knowing what an unknown page is selling
+
+On a site with an adapter, the kind is known. On any other page it is inferred
+from the URL and title (`guessKind`), because assuming *flight* everywhere put
+nightly hotel rates into the planner as flat fares — a rate is only multiplied
+across the stay for a `stay` row. `stay` is tested before travel keywords, since
+a hotel page mentions airports far more often than a flight page mentions rooms.
+
+The two-clock-times requirement is also relaxed off the known sites: a hotel
+page has prices and no departure times at all, so there a price alone qualifies
+a row. On the known flight sites the stricter rule stays, or their filter and
+navigation chrome would be captured as results.
+
+Selected prices travel as **trip-notes text**, not structured data, and the
+page parses them with the planner's own `linesToRows()`. The extension
+therefore never reimplements the notes grammar — and a `RATE:` line a user
+selects comes along with the prices it applies to.
+
+## Why it is shaped this way
+
+The planner's value is its cost model: options grouped per leg, ranked
+combinations, date windows that never mix price-research rounds. Capture is
+in service of that — its only job is to stop you retyping what you already
+found in a browser tab.
+
+So captured data is **staged, never applied**. Offers land in a review panel;
+rows only enter your plan when you click Add. A scraper that misreads a page
+costs you a glance, not a rewritten itinerary.
+
+## Architecture
+
+```
+┌──────────────────────┐         ┌──────────────────────┐
+│  Any page            │  select │  TripAgent extension │
+│  (right-click a      │────────▶│  contextMenus        │
+│   price)             │         │      │               │
+├──────────────────────┤         │      ▼               │
+│  Booking site tab    │         │  scrapers.js         │
+│  kayak, booking.com, │◀────────│  content.js          │
+│  capitalone, amex, … │ scrape  │      │               │
+│  DOM                 │         │      ▼ runtime msg   │
+                                 │  background.js       │
+                                 │  (staging store)     │
+                                 │      │               │
+                                 └──────┼───────────────┘
+                                        │ chrome.tabs.sendMessage
+                                        ▼
+                             ┌─────────────────────────┐
+                             │ Planner tab             │
+                             │                         │
+                             │  bridge.js  (isolated)  │
+                             │      │ window.postMessage
+                             │      ▼                  │
+                             │  tripAgentBridge.js     │
+                             │      │                  │
+                             │      ▼                  │
+                             │  tripAgentOffers.js ◀───┼──── backend
+                             │   (normalize → rows)    │   /api/flights
+                             │      │                  │
+                             │      ▼                  │
+                             │  TripAgentPanel (stage) │
+                             │      │ user clicks Add  │
+                             │      ▼                  │
+                             │  the plan table         │
+                             └─────────────────────────┘
+```
+
+A content script runs in an isolated world, so it cannot call into the page's
+JavaScript and the page cannot call into it. `window.postMessage` is the only
+channel between them, and `extension/bridge.js` is the only thing that
+relays across it.
+
+## The offer shape
+
+Every source — scraper or API — produces *raw* offers. `normalizeOffer()` in
+`src/utils/tripAgentOffers.js` turns those into the canonical shape. Raw
+input is permissive (it accepts `from`/`origin`/`departureAirport`, a price
+as a number, a string or an object); canonical output is not.
+
+```js
+{
+  id: 'ta_1k2j3h',                 // stable: derived from the offer's content
+  kind: 'flight',                  // flight | train | bus | ferry | car | hotel | stay | activity
+  category: 'travel',              // travel | stay | activity — the planner's own buckets
+  group: 'IST → MUC',              // leg for travel, place for a stay
+  carrier: 'Turkish Airlines',
+  departure: '06:45',              // always HH:MM, or ''
+  arrival: '11:30',
+  duration: '3h 45m',
+  stops: 0,
+  price: { low: 2100, high: 2100, currency: 'EUR' },
+  perNight: false,
+  nights: 1,
+  window: '14-19 Aug',             // date-window tag; see the app's WINDOW: notes
+  label: '', detail: '',
+  source: 'kayak',
+  sourceUrl: 'https://…',
+  capturedAt: '2026-08-01T10:00:00.000Z',
+}
+```
+
+`offerToRow()` then produces exactly the row shape the planner already
+edits — `{id, category, group, option, timeText, costText, detail, window}` —
+so a captured option is indistinguishable from a typed one downstream, and
+takes part in combinations, totals and export unchanged.
+
+### The one seam that matters
+
+The planner reads cost from a row's **text** (`parseCost` in
+`parseTripNotes.js`), which understands `€2100`, `€250-350`, `€140/night x3`,
+`₺45000` and `free`. So `offerCostText()` must emit something that parses back
+identically. It draws on the planner's own `CURRENCY_SYMBOLS` rather than a
+private list, so a currency added there is understood here immediately.
+
+Two distinct questions get confused easily:
+
+- **Can the cost be written?** Yes for every currency in `CURRENCY_SYMBOLS`
+  (EUR, USD, GBP, TRY, CHF). For anything else the cost cell is left **empty**
+  and the amount is preserved in the row's detail as
+  `price JPY 145000 (enter manually)` — a missing number beats a wrong one.
+- **Can the cost be totalled?** Only in the base currency (EUR) or with a
+  `RATE: <CODE> <eur-per-unit>` line on file. Without one, `convertToBase()`
+  returns `missingRate: true` and the planner *excludes* the cost from sums
+  rather than guessing 1:1. The capture panel names the currencies that still
+  need a rate, since only the user can supply it.
+
+Three bugs in this area were caught by the self-test and are now pinned by
+regression assertions, because all three produced plausible-looking wrong
+numbers rather than errors:
+
+- `normalizeTime` missed ISO timestamps — no `\b` between a date's `T` and the
+  hour, so every JSON-LD capture landed with empty times.
+- `normalizePrice` missed a currency code glued to its amount (`TRY45000`) for
+  the same reason — no `\b` between `Y` and `4` — and silently relabelled the
+  fare as euros.
+- A per-night price round-tripped through `parseCost` (which expands it across
+  the stay) and back out multiplied the nights **twice**: `€140/night x3` → 420
+  → `€420/night x3` → 1260.
+
+## Message protocol
+
+Envelopes carry `source` and `protocol` tags, and both sides check
+`event.source === window` and `event.origin === window.location.origin`.
+Anything else is dropped — an embedded frame cannot drive the extension, and
+a third-party script cannot inject offers.
+
+**Extension → page** (`source: 'tripagent-extension'`, `protocol: 'tripagent/v1'`):
+
+| `type`   | payload                                | meaning                          |
+|----------|----------------------------------------|----------------------------------|
+| `OFFERS` | `offers[]`, `captureSource`, `sourceUrl` | structured offers from a scraper |
+| `NOTES`  | `notes` (text), `captureSource`         | trip-notes lines from a reviewed text selection |
+| `STATUS` | `version`, `capturedCount`             | reply to the page's `READY`      |
+
+**Page → extension** (`source: 'tripagent-page'`):
+
+| `type`            | meaning                                      |
+|-------------------|----------------------------------------------|
+| `READY`           | the panel mounted; send status and anything staged |
+| `REQUEST_OFFERS`  | re-send what the extension has staged        |
+| `CLEAR_OFFERS`    | drop the extension's staging store           |
+
+## Bank travel portals
+
+Capital One and Amex price the same flights differently from a public API, and
+neither can be queried from a server: the prices only exist inside the user's
+authenticated session. The extension is the only thing that can reach them,
+which is why the data flows the long way round:
+
+```
+  authenticated portal tab              backend                 planner tab
+  ─────────────────────────             ───────                 ───────────
+  content.js scrapes card
+        │
+        ├──── PUSH_OFFERS ───────────────────────────────────▶ staging panel
+        │                                (immediate)
+        └──── POST /api/flights/ingest ─▶ 2h cache
+                                             │
+                                             ▼
+                              GET /api/flights  ──▶ merged + ranked ──▶ panel
+                              (folds in the API's own results)
+```
+
+The direct push is what makes capture feel instant. The ingest copy is what
+makes it survive: the tab closes, the browser restarts, and a search tomorrow
+morning still knows what Capital One was charging — until the two-hour TTL
+expires it, because a stale fare presented as current is worse than none.
+
+Two things the portal adapters are careful about:
+
+- **Currency is stated, never inferred.** These portals quote in the card's
+  currency (USD). A bare `320` read as euros would be wrong by the exchange
+  rate, so a card with no currency marker at all is skipped rather than
+  guessed at.
+- **Points are not money.** Portals quote fares in miles as well as cash
+  (`32,000 miles + $5.60`). Captured as a cash price, that would put tens of
+  thousands of euros into a trip total; and the `$5.60` beside it is a
+  redemption fee, not the fare. A points fare is recorded in the row's detail
+  with no price at all, so it can be seen and never totalled.
+
+## Backend
+
+`backend/server.mjs` is a dependency-free proxy in front of a flight-search
+API. It exists so credentials never reach the browser, and so the app sees
+one offer shape no matter which provider is behind it.
+
+```
+GET  /api/health
+GET  /api/flights?from=IST&to=MUC&date=2026-08-14[&returnDate=][&adults=1][&currency=EUR]
+POST /api/flights/search    { origin, destination, departDate, passengers, … }
+POST /api/flights/ingest    { source, flights|offers, searchParams }
+GET  /api/flights/ingested?from=&to=&date=
+```
+
+Every search folds ingested portal data in with the provider's own results,
+drops exact repeats within a source, and ranks cheapest first. The same flight
+from two different portals is deliberately **not** collapsed — that comparison
+is the answer the user came for. If the API fails but portal data answered, the
+response is a `200` carrying a `providerError`: real but incomplete results beat
+none.
+
+With no credentials configured it answers with **sample data**, flagged
+`live: false` and labelled in the UI. That keeps the whole pipeline testable
+without an API key; it is not a fallback you would ever want to mistake for
+a quote. See [backend/README.md](../backend/README.md).
+
+## Setup
+
+```bash
+npm install
+npm start                       # the planner, http://localhost:3000
+npm run backend                 # optional, http://localhost:8787
+```
+
+Load the extension: `chrome://extensions` → Developer mode →
+**Load unpacked** → select `extension/`. See
+[extension/README.md](../extension/README.md).
+
+Point the app at a non-default backend with
+`REACT_APP_TRIPAGENT_API=https://… npm start` (Create React App reads
+`REACT_APP_*` at build time).
+
+## Testing
+
+```bash
+npm run tripagent:selftest      # data pipeline, no browser or API key needed
+node scripts/tripagent-browser-test.mjs [--backend]   # needs the app running + Playwright
+```
+
+The self-test covers time/price parsing, the offer→row conversion, the
+cost round-trip, dedupe, the Amadeus mapping, request validation, the
+scrapers against a synthetic DOM, and a full run through the planner's own
+cost and combination logic. The browser test covers the bridge, its origin
+checks, and that staging never writes to the plan by itself.
+
+## Known limits
+
+- **Scrapers are best-effort.** Booking sites change markup constantly. The
+  scrapers avoid class names and read JSON-LD or rendered text instead, but
+  a redesign can still break one. The failure mode is "nothing captured",
+  not "wrong data captured" — and the popup's manual capture with route
+  overrides is always there.
+- **Airport codes vs. city names.** Scraped routes come from the URL when it
+  has them; otherwise the popup's override fills them in. Nothing is guessed.
+- **Portal selectors are the most fragile thing here.** The bank portals are
+  authenticated single-page apps with no structured data to fall back on, so
+  their adapters rely on card containers and rendered text. Expect to adjust
+  `rootSelectors` in `scrapers.js` when a portal is redesigned; the symptom is
+  "captured nothing", and right-click capture still works meanwhile.
+- **Round trips are priced once.** Amadeus quotes one price per offer, so it
+  is attributed to the outbound leg and the return is marked
+  `return (priced with outbound)`. Pricing both would double the total.
+- **Staging is not persistent.** Scraped offers live in the extension's
+  *session* store and the panel's React state, so a browser restart drops
+  them. Selected prices live in *local* storage and survive, because they are
+  hand-corrected work. The plan itself is saved across reloads.
+
+## Next steps
+
+Not built, in rough order of usefulness:
+
+1. Hotel search, on both paths: Amadeus has a hotel API, and the portals sell
+   hotels through the same card layout the flight adapters already read. The
+   offer shape supports `perNight`/`nights` already.
+2. Real portal selector tuning against live accounts. The adapters are written
+   against the layout the portals document publicly; only a logged-in session
+   shows whether `rootSelectors` need narrowing.
+3. Persisting the ingest cache. It is in-memory, so a backend restart loses
+   it; the shape is already a plain map, so a table or a JSON file would do.
+4. Public-API clients beyond Amadeus (Kayak, Skyscanner), which slot in as
+   another provider module behind `handleFlights()`.
+4. Live exchange rates, so `RATE:` lines don't have to be typed by hand.
+   Conversion itself is done — only the rate source is manual.

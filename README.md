@@ -10,6 +10,8 @@ An interactive React-based trip planning tool that optimizes your Europe itinera
 - **Flexible Stay Duration**: Drag slider to adjust Milan stay (1–7 days)
 - **Family-Friendly Recommendations**: Optimized for travel with infant
 - **Cost Breakdown**: Real-time cost estimation for flights and train
+- **Multi-Currency**: Mix EUR, USD, GBP, TRY and CHF; set `RATE:` lines to fold them into one total
+- **Price Capture**: Right-click any price, scrape supported portals, or search flights via the backend
 - **Responsive Design**: Works seamlessly on mobile (iOS), tablet, and desktop
 
 ## 📋 Route Overview
@@ -50,6 +52,11 @@ npm start
 
 4. Open [http://localhost:3000](http://localhost:3000) in your browser
 
+Want to plan a real trip with your own captured portal offers? See
+[docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) for the full walkthrough —
+loading the extension, capturing from Capital One/Amex or any site, tagging a
+hotel with its card program, and letting the planner rank the combinations.
+
 ## 📱 Using on iOS (Claude App)
 
 1. Open **Claude** on your iPhone
@@ -57,17 +64,67 @@ npm start
 3. The app runs interactively with real-time state updates
 4. Adjust controls to optimize your itinerary
 
+## 📲 Add to your iPhone home screen
+
+The app is a installable web app: open it in Safari, tap **Share** →
+**Add to Home Screen**, and it launches full-screen with its own icon, no
+address bar.
+
+## 📌 Capturing prices on iPhone
+
+**Easiest: share the screenshot with Claude.** With the Claude connector set
+up once ([docs/CLAUDE-CONNECTOR.md](docs/CLAUDE-CONNECTOR.md)), attach a
+screenshot of your card portal's results in the Claude app and say "add these
+to my trip planner". Claude records the options; they're waiting in the
+planner for review the next time you open it. No API key needed.
+
+**Or read it in the planner.** Take a screenshot of your card portal's results,
+open the planner's **TripAgent capture** panel, pick the screenshot under
+**Screenshot**, and tap **Read screenshot**. Claude reads it into options you
+review before anything is added. This works for pages only you can see
+(logged in), on any device. It uses your own Anthropic API key, which stays
+in your browser and is sent only to api.anthropic.com — use a dedicated key
+with a spend limit.
+
+**Or the bookmarklet.** The browser extension can't run on iPhone at all — no iOS browser, Chrome
+included, supports extensions (Apple requires them all to run on Safari's
+engine). The substitute is a **bookmarklet**: a Safari bookmark that runs the
+same scraper the extension uses, then opens the planner with the result
+ready to review. Open **`/capture.html`** on the deployed site for the
+one-time install steps. See [docs/BOOKMARKLET.md](docs/BOOKMARKLET.md) for
+how it works and [extension/README.md](extension/README.md) for why real
+extensions can't make the trip.
+
 ## 🛠️ Project Structure
 
 ```
 trip_planner/
 ├── src/
 │   ├── components/
-│   │   └── TripPlanner.jsx      # Main component
+│   │   ├── TripPlanner.jsx       # Main component
+│   │   └── TripAgentPanel.jsx    # Staging panel for captured offers
+│   ├── hooks/
+│   │   └── useTripAgent.js       # Collects offers from extension + backend
+│   ├── utils/
+│   │   ├── parseTripNotes.js     # Notes parsing, cost model, export
+│   │   ├── tripAgentOffers.js    # Offer normalization → editable rows
+│   │   ├── tripAgentBridge.js    # Page half of the extension bridge
+│   │   └── tripAgentApi.js       # Backend client
 │   ├── App.jsx                   # App wrapper
 │   ├── App.css                   # Component styles
 │   ├── index.jsx                 # Entry point
 │   └── index.css                 # Global styles
+├── extension/                    # Browser extension (MV3) — see its README
+│   ├── lib/capture.js            # Notes-line formatting, shared by worker + popup
+│   └── scrapers.js               # Site adapters, JSON-LD + text heuristics
+├── backend/                      # Flight-search proxy — see its README
+├── scripts/
+│   ├── generate-report.mjs       # Notes → trip-plan.json/.md, no browser
+│   ├── extract-screenshot.mjs    # Screenshot → trip notes, via the Claude API
+│   ├── tripagent-selftest.mjs    # Data-pipeline checks
+│   └── tripagent-browser-test.mjs# Bridge checks in a real browser
+├── docs/
+│   └── TRIPAGENT-INTEGRATION.md  # Architecture and data contract
 ├── public/
 │   └── index.html                # HTML template
 ├── package.json                  # Dependencies
@@ -75,6 +132,51 @@ trip_planner/
 ├── README.md                     # This file
 └── LICENSE                       # MIT License
 ```
+
+## 🔌 Getting prices into the app
+
+Typing every fare by hand doesn't scale, so there are four ways in — no single
+one covers every site, which is exactly why there are several.
+
+| Tool | Works on | Effort | Breaks when |
+|------|----------|--------|-------------|
+| **Right-click capture** (`extension/`) | any page, anywhere | select a price, right-click | never |
+| **Capture this page** (`extension/`) | any page, anywhere | click one button | a page has no readable prices |
+| **Automatic scraping** (`extension/`) | Google Flights, Kayak, Skyscanner, Booking.com, Trainline, DB | none | a site redesigns |
+| **Bank travel portals** (`extension/` + `backend/`) | Capital One, Amex — in your logged-in session | none | a portal redesigns |
+| **Backend flight search** (`backend/`) | Amadeus, via `npm run backend` | fill a form | an API key expires |
+| **Claude connector** (`mcp-server/`) | a screenshot shared with Claude in the Claude app, any device | attach it, say "add these to my trip planner" | one-time Cloudflare deploy — see [docs/CLAUDE-CONNECTOR.md](docs/CLAUDE-CONNECTOR.md) |
+| **Read screenshot** (TripAgent panel) | a screenshot of any page — including a card portal only you can see — on any device, iPhone included | pick the image, tap Read | needs your own Anthropic API key (well under a cent per screenshot, using Claude Haiku) |
+| **Screenshot transcription CLI** (`scripts/extract-screenshot.mjs`) | the same, from the command line | run the CLI | needs `ANTHROPIC_API_KEY` |
+
+The extension is not restricted to a list of sites: the first two rows work on
+whatever page you have open. The site-specific rows only buy *automatic*
+capture, so you don't have to click anything there.
+
+Everything converges on the same trip-notes shorthand and the same editable
+rows, so nothing downstream needs to know where a line came from.
+
+Captures are **staged, not applied**: they appear in the *TripAgent capture*
+panel with route, times and price, and become rows in your plan only when you
+click Add. A misread page costs you a glance, never a rewritten itinerary.
+
+Prices in a non-euro currency are captured faithfully (`₺45000` stays lira) but
+stay out of your totals until you give them a rate — add a
+`RATE: TRY 0.0181` line under *Edit trip data*. The planner never guesses 1:1.
+
+Architecture and the data contract: [docs/TRIPAGENT-INTEGRATION.md](docs/TRIPAGENT-INTEGRATION.md).
+
+## 🧪 Scripts
+
+| Command | What it does |
+|---------|--------------|
+| `npm start` | Run the planner at http://localhost:3000 |
+| `npm run build` | Production build |
+| `npm run backend` | Run the flight-search proxy at http://localhost:8787 |
+| `npm run report -- notes.txt` | Generate `trip-plan.json` / `.md` without a browser |
+| `npm run tripagent:selftest` | Check the capture pipeline (no browser, no API key) |
+| `node scripts/tripagent-browser-test.mjs` | Check the extension bridge in a real browser (needs Playwright) |
+| `node scripts/extract-screenshot.mjs <image>` | Transcribe a screenshot of search results into trip notes (needs `ANTHROPIC_API_KEY`) |
 
 ## 🎮 How to Use
 
@@ -137,8 +239,10 @@ This project is licensed under the **MIT License** — see [LICENSE](LICENSE) fi
 - [ ] Add daily budget tracker
 - [ ] Support for multiple travelers
 - [ ] Hotel comparison across MXP vs BGY access
-- [ ] Booking integration (flights, trains, hotels)
-- [ ] Currency conversion
+- [x] Flight capture from booking sites (extension) and a search proxy (backend)
+- [x] Bank travel portal capture (Capital One, Amex) with server-side aggregation
+- [ ] Hotel search in the backend
+- [x] Currency conversion (`RATE:` lines, EUR base)
 - [ ] Weather forecast for travel dates
 
 ## 📧 Support
@@ -147,5 +251,5 @@ Questions or suggestions? Open an issue on GitHub or reach out!
 
 ---
 
-**Last Updated**: August 11, 2026  
-**Version**: 1.0.0
+**Last Updated**: September 19, 2026  
+**Version**: 1.1.0

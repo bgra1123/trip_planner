@@ -1,0 +1,16 @@
+{
+  "name": "trip-planner-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MCP connector that lets Claude record travel options into the trip planner.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node test/worker.test.mjs && node test/mcp-client.test.mjs"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "wrangler": "^4.147.0"
+  }
+}

@@ -1,0 +1,17 @@
+name = "trip-planner-mcp"
+main = "src/worker.js"
+compatibility_date = "2026-09-01"
+
+# Create once with: npx wrangler kv namespace create TRIPS
+# then paste the printed id below.
+[[kv_namespaces]]
+binding = "TRIPS"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+# The planner origins allowed to pull options (comma-separated). Defaults to
+# the GitHub Pages site plus localhost:3000 if unset.
+# [vars]
+# ALLOWED_ORIGINS = "https://bgra1123.github.io,http://localhost:3000"
+
+# TRIP_TOKEN is a secret, never in this file:
+#   npx wrangler secret put TRIP_TOKEN

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>TripAgent Capture</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <h1>TripAgent Capture</h1>
+    <p class="hint" id="subtitle">Works on whatever page you have open — right-click a price, or hit Capture below. Known travel sites are picked up automatically.</p>
+  </header>
+
+  <!-- Selection captures: free-form text, reviewed by hand -->
+  <section class="section">
+    <h2>Selected prices</h2>
+    <div id="empty-state" class="empty" hidden>
+      No captures yet. Select price text on a page, right-click, and pick <strong>“Add to Trip Planner”</strong>.
+    </div>
+    <ul id="capture-list"></ul>
+    <div class="btn-row">
+      <button id="copy-btn" class="btn -primary">Copy as trip notes</button>
+      <button id="send-notes-btn" class="btn">Send to planner</button>
+      <button id="clear-btn" class="btn -ghost">Clear</button>
+    </div>
+  </section>
+
+  <!-- Scraped offers: structured rows from a supported site -->
+  <section class="section">
+    <h2>Scraped offers</h2>
+    <p class="hint">Capture reads the page you're on, whatever site it is.</p>
+    <div class="overrides">
+      <label>From <input id="from" placeholder="IST" maxlength="4" /></label>
+      <label>To <input id="to" placeholder="MUC" maxlength="4" /></label>
+      <label>Window <input id="window" placeholder="14-19 Aug" /></label>
+    </div>
+    <p class="hint">Overrides fill in what a page URL doesn’t say, and are saved for next time.</p>
+    <div id="offers-empty" class="empty" hidden>
+      Nothing scraped yet. Open any flight or hotel search and hit <strong>Capture this page</strong>.
+    </div>
+    <ul id="offer-list"></ul>
+    <div class="btn-row">
+      <button id="capture-btn" class="btn -primary">Capture this page</button>
+      <button id="send-offers-btn" class="btn">Send to planner</button>
+      <button id="clear-offers-btn" class="btn -ghost">Clear</button>
+    </div>
+  </section>
+
+  <footer>
+    <div id="status" class="status" hidden></div>
+  </footer>
+
+  <script src="lib/capture.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

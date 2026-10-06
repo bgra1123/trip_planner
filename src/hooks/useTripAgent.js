@@ -8,8 +8,14 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { listenForExtension, requestCapturedOffers, clearExtensionOffers, consumeBookmarkletCapture } from '../utils/tripAgentBridge.js';
-import { mergeOffers, offersToRows, offersFromNotesText } from '../utils/tripAgentOffers.js';
+import { mergeOffers, offersToRows, offersFromNotesText, normalizeOffers } from '../utils/tripAgentOffers.js';
 import { searchFlights } from '../utils/tripAgentApi.js';
+import { fetchPendingOffers, ackOffers } from '../utils/connectorSync.js';
+
+const CONNECTOR_STORAGE = 'tripagent:claude-connector-url';
+function readConnectorUrl() {
+  try { return window.localStorage.getItem(CONNECTOR_STORAGE) || ''; } catch { return ''; }
+}
 
 export default function useTripAgent() {
   const [offers, setOffers] = useState([]);
@@ -66,15 +72,75 @@ export default function useTripAgent() {
     }
   }, []);
 
-  const dismissOffer = useCallback((id) => {
-    setOffers((prev) => prev.filter((o) => o.id !== id));
+  // ---- Claude connector (mcp-server/) ------------------------------------
+  // Options Claude recorded wait on the connector until the user adds or
+  // dismisses them here; only then is the connector told to forget them.
+  // Staging lives in memory, so a reload before reviewing just pulls them
+  // again rather than losing them.
+  const [connectorUrl, setConnectorUrlState] = useState(readConnectorUrl);
+  const [connector, setConnector] = useState({ busy: false, error: null, lastCount: null });
+  const connectorUrlRef = useRef(connectorUrl);
+  const fromConnector = useRef(new Set());
+
+  const pullFromClaude = useCallback(async () => {
+    const url = connectorUrlRef.current;
+    if (!url) return;
+    setConnector((s) => ({ ...s, busy: true, error: null }));
+    try {
+      const incoming = normalizeOffers(await fetchPendingOffers(url), { source: 'claude' });
+      if (!mounted.current) return;
+      incoming.forEach((o) => fromConnector.current.add(o.id));
+      if (incoming.length) setOffers((prev) => mergeOffers(prev, incoming));
+      setConnector({ busy: false, error: null, lastCount: incoming.length });
+    } catch (err) {
+      if (!mounted.current) return;
+      setConnector({ busy: false, error: err.message, lastCount: null });
+    }
   }, []);
 
+  const setConnectorUrl = useCallback((url) => {
+    const value = String(url || '').trim();
+    try {
+      if (value) window.localStorage.setItem(CONNECTOR_STORAGE, value);
+      else window.localStorage.removeItem(CONNECTOR_STORAGE);
+    } catch { /* storage blocked — kept for this session only */ }
+    connectorUrlRef.current = value;
+    fromConnector.current = new Set();
+    setConnectorUrlState(value);
+    setConnector({ busy: false, error: null, lastCount: null });
+  }, []);
+
+  // Pull on open, and again whenever the tab comes back into view — the
+  // usual path is: record in the Claude app, switch back here.
+  useEffect(() => {
+    if (!connectorUrl) return undefined;
+    pullFromClaude();
+    const onVisible = () => { if (document.visibilityState === 'visible') pullFromClaude(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [connectorUrl, pullFromClaude]);
+
+  const forgetOnConnector = useCallback((ids) => {
+    const done = ids.filter((id) => fromConnector.current.has(id));
+    if (!done.length || !connectorUrlRef.current) return;
+    done.forEach((id) => fromConnector.current.delete(id));
+    ackOffers(connectorUrlRef.current, done).catch((err) => {
+      // Harmless if it fails: they come back on the next pull, still unreviewed.
+      if (mounted.current) setConnector((s) => ({ ...s, error: err.message }));
+    });
+  }, []);
+
+  const dismissOffer = useCallback((id) => {
+    setOffers((prev) => prev.filter((o) => o.id !== id));
+    forgetOnConnector([id]);
+  }, [forgetOnConnector]);
+
   const clearOffers = useCallback(() => {
+    forgetOnConnector(Array.from(fromConnector.current));
     setOffers([]);
     setCapturedRates({});
     clearExtensionOffers();
-  }, []);
+  }, [forgetOnConnector]);
 
   const refreshFromExtension = useCallback(() => { requestCapturedOffers(); }, []);
 
@@ -105,8 +171,12 @@ export default function useTripAgent() {
       .map((o) => (groupOverrides[o.id] !== undefined ? { ...o, group: groupOverrides[o.id] } : o));
     const rows = offersToRows(picked);
     setOffers((prev) => prev.filter((o) => !wanted.has(o.id)));
+    forgetOnConnector(ids);
     return rows;
-  }, [offers]);
+  }, [offers, forgetOnConnector]);
 
-  return { offers, capturedRates, extension, search, runFlightSearch, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor, stageNotes };
+  return {
+    offers, capturedRates, extension, search, runFlightSearch, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor, stageNotes,
+    connectorUrl, setConnectorUrl, connector, pullFromClaude,
+  };
 }

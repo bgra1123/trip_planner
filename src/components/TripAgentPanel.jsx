@@ -40,7 +40,11 @@ function priceLabel(offer) {
 }
 
 export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = {}, existingStayGroups = [] }) {
-  const { offers, capturedRates, extension, search, runFlightSearch, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor, stageNotes } = useTripAgent();
+  const {
+    offers, capturedRates, extension, search, runFlightSearch, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor, stageNotes,
+    connectorUrl, setConnectorUrl, connector, pullFromClaude,
+  } = useTripAgent();
+  const [connectorDraft, setConnectorDraft] = useState('');
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ from: '', to: '', date: '', adults: '1', currency: 'EUR', window: defaultWindow });
   const [linkForm, setLinkForm] = useState({ url: '', note: '' });
@@ -191,6 +195,55 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
             Offers captured by the browser extension or fetched from the backend land here first. Nothing reaches
             your table until you add it, so a bad scrape can never rewrite a plan you are working on.
           </p>
+
+          {/* Claude connector — share a screenshot with Claude in the Claude
+              app, Claude records the options, they show up here. Set up once
+              (docs/CLAUDE-CONNECTOR.md); pulled on open and whenever this tab
+              comes back into view. */}
+          <div className="mb-2 pb-3 border-b border-slate-100">
+            {connectorUrl ? (
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-[0.65rem] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700">Claude connector on</span>
+                <span className="text-slate-500">
+                  {connector.busy ? 'Checking for options from Claude…'
+                    : connector.lastCount === null ? 'Options Claude records will appear below.'
+                      : connector.lastCount ? `${connector.lastCount} option${connector.lastCount === 1 ? '' : 's'} from Claude waiting below.`
+                        : 'Nothing new from Claude.'}
+                </span>
+                <button type="button" onClick={pullFromClaude} disabled={connector.busy} className="text-blue-600 underline disabled:text-slate-300">Check now</button>
+                <button type="button" onClick={() => setConnectorUrl('')} className="text-slate-400 hover:text-red-600 underline">Disconnect</button>
+              </div>
+            ) : (
+              <form
+                onSubmit={(e) => { e.preventDefault(); if (connectorDraft.trim()) { setConnectorUrl(connectorDraft); setConnectorDraft(''); } }}
+                className="flex flex-wrap items-end gap-2"
+              >
+                <label className="text-[0.65rem] uppercase tracking-wide text-slate-500">
+                  <span className="block mb-1">Claude connector URL</span>
+                  <input
+                    type="url"
+                    value={connectorDraft}
+                    onChange={(e) => setConnectorDraft(e.target.value)}
+                    placeholder="https://…workers.dev/mcp/…"
+                    className="w-64 font-mono text-xs px-2 py-1.5 rounded border border-slate-300 focus:border-blue-400 focus:outline-none normal-case"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={!connectorDraft.trim()}
+                  className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 hover:border-blue-500 disabled:text-slate-300"
+                >
+                  Connect
+                </button>
+              </form>
+            )}
+            {connector.error && <p className="text-xs text-red-600 mt-2">{connector.error}</p>}
+            <p className="text-xs text-slate-500 mt-2">
+              Share a portal screenshot with Claude in the Claude app and ask it to add the prices to your trip — they
+              show up here for review, no API key needed. One-time setup: deploy the connector and paste the same URL you
+              gave Claude (see docs/CLAUDE-CONNECTOR.md).
+            </p>
+          </div>
 
           {/* Type in a price — for anything the extension cannot reach: a
               bank portal's own page, a quote by email, a price read over the

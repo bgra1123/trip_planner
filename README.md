@@ -72,7 +72,13 @@ address bar.
 
 ## 📌 Capturing prices on iPhone
 
-**Easiest: screenshot it.** Take a screenshot of your card portal's results,
+**Easiest: share the screenshot with Claude.** With the Claude connector set
+up once ([docs/CLAUDE-CONNECTOR.md](docs/CLAUDE-CONNECTOR.md)), attach a
+screenshot of your card portal's results in the Claude app and say "add these
+to my trip planner". Claude records the options; they're waiting in the
+planner for review the next time you open it. No API key needed.
+
+**Or read it in the planner.** Take a screenshot of your card portal's results,
 open the planner's **TripAgent capture** panel, pick the screenshot under
 **Screenshot**, and tap **Read screenshot**. Claude reads it into options you
 review before anything is added. This works for pages only you can see
@@ -139,6 +145,7 @@ one covers every site, which is exactly why there are several.
 | **Automatic scraping** (`extension/`) | Google Flights, Kayak, Skyscanner, Booking.com, Trainline, DB | none | a site redesigns |
 | **Bank travel portals** (`extension/` + `backend/`) | Capital One, Amex — in your logged-in session | none | a portal redesigns |
 | **Backend flight search** (`backend/`) | Amadeus, via `npm run backend` | fill a form | an API key expires |
+| **Claude connector** (`mcp-server/`) | a screenshot shared with Claude in the Claude app, any device | attach it, say "add these to my trip planner" | one-time Cloudflare deploy — see [docs/CLAUDE-CONNECTOR.md](docs/CLAUDE-CONNECTOR.md) |
 | **Read screenshot** (TripAgent panel) | a screenshot of any page — including a card portal only you can see — on any device, iPhone included | pick the image, tap Read | needs your own Anthropic API key (well under a cent per screenshot, using Claude Haiku) |
 | **Screenshot transcription CLI** (`scripts/extract-screenshot.mjs`) | the same, from the command line | run the CLI | needs `ANTHROPIC_API_KEY` |
 

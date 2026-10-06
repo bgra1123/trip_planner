@@ -1,0 +1,2 @@
+"use strict";(globalThis.webpackChunktrip_planner||=[]).push([[952],{952(t,e,n){var i=n(302);function s(t){return new Proxy({},{get(e,n){if("symbol"!==typeof n)throw new i.pJ(`\`${t}.${n}\` is not available in this environment; it needs a Node.js-compatible runtime`)}})}const a=s("fs"),o=s("path");n.d(e,["fs",0,a,"path",0,o])}}]);
+//# sourceMappingURL=952.1aa00e8b.chunk.js.map

@@ -1,0 +1,11 @@
+# NYC → Paris, 28–31 Oct 2026 — options saved from Capital One Travel (6 Oct 2026)
+# Paste into the planner's notes box, or run:
+#   node scripts/generate-report.mjs trips/nyc-paris-oct-2026.txt --out ./report
+# Prices are in USD as quoted by Capital One Travel (earn 5X miles on flights).
+
+WINDOW: 28-31 Oct
+FLIGHT: NYC to Paris, 2:00-14:05, $775, Delta nonstop JFK-CDG 7h 5m, Main Basic, Best Quality + Best Overall
+FLIGHT: NYC to Paris, 15:30-6:20, $743, Air Canada 1 stop LGA-CDG 9h 50m, Basic, Best Price
+FLIGHT: NYC to Paris, $775, Air France nonstop JFK-CDG, Light fare, times not captured
+
+NOTE: Return Paris to NYC on 31 Oct not yet chosen

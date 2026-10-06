@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { listenForExtension, requestCapturedOffers, clearExtensionOffers, consumeBookmarkletCapture } from '../utils/tripAgentBridge.js';
-import { mergeOffers, offersToRows } from '../utils/tripAgentOffers.js';
+import { mergeOffers, offersToRows, offersFromNotesText } from '../utils/tripAgentOffers.js';
 import { searchFlights } from '../utils/tripAgentApi.js';
 
 export default function useTripAgent() {
@@ -78,6 +78,17 @@ export default function useTripAgent() {
 
   const refreshFromExtension = useCallback(() => { requestCapturedOffers(); }, []);
 
+  // Trip-notes lines from somewhere other than the extension (a screenshot
+  // the model transcribed) go through the same parser and into the same
+  // staging list, so they are reviewed before anything reaches the plan.
+  // Returns how many offers were staged.
+  const stageNotes = useCallback((notesText, source) => {
+    const { offers: incoming, rates } = offersFromNotesText(notesText, { source: source || 'screenshot' });
+    if (incoming.length) setOffers((prev) => mergeOffers(prev, incoming));
+    if (rates && Object.keys(rates).length) setCapturedRates((prev) => ({ ...prev, ...rates }));
+    return incoming.length;
+  }, []);
+
   // Hand back rows for the given offer ids and drop them from staging, so
   // an offer cannot be added to the table twice by a double click. Rows are
   // built from the rendered `offers` (not inside the state updater, which
@@ -97,5 +108,5 @@ export default function useTripAgent() {
     return rows;
   }, [offers]);
 
-  return { offers, capturedRates, extension, search, runFlightSearch, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor };
+  return { offers, capturedRates, extension, search, runFlightSearch, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor, stageNotes };
 }

@@ -718,6 +718,51 @@ for (const blocked of ['chrome://settings', 'about:blank', 'devtools://devtools/
   check('an empty injection result is handled', reply.offers, []);
 }
 
+// ---- screenshot extraction (fake client — no API call, no cost) ----------
+{
+  const { extractNotesFromImages, buildScreenshotRequest, withWindow, cleanModelText, SCREENSHOT_MODEL } =
+    await import('../src/utils/screenshotExtract.js');
+  const IMG = { mediaType: 'image/jpeg', data: 'AAAA' };
+
+  const req = buildScreenshotRequest([IMG, IMG]);
+  check('screenshot request uses the default model', req.model, SCREENSHOT_MODEL);
+  check('screenshot request opts into refusal fallback', [req.fallbacks, req.betas], ['default', ['server-side-fallback-2026-07-01']]);
+  const blocks = req.messages[0].content;
+  check('every screenshot becomes an image block, prompt last', blocks.map((b) => b.type), ['image', 'image', 'text']);
+  check('image blocks carry base64 source', blocks[0].source, { type: 'base64', media_type: 'image/jpeg', data: 'AAAA' });
+
+  check('code fences around the reply are stripped', cleanModelText('```\nFLIGHT: A to B, €1\n```'), 'FLIGHT: A to B, €1');
+  check('a window label wraps the lines', withWindow('HOTEL: Paris - room, €200/night x3', '21-24 Oct'),
+    'WINDOW: 21-24 Oct\nHOTEL: Paris - room, €200/night x3\nWINDOW:');
+  check('no window label leaves the lines alone', withWindow('NOTE: x', ''), 'NOTE: x');
+
+  let sent = null;
+  const fakeClient = (response) => ({ beta: { messages: { create: async (body) => { sent = body; return response; } } } });
+  const reply = 'FLIGHT: NYC to PAR, 18:30-07:45, USD612, Air France\nHOTEL: Paris - Le Marais room, USD280/night x3, Amex FHR';
+  const result = await extractNotesFromImages([IMG], {
+    client: fakeClient({ stop_reason: 'end_turn', model: SCREENSHOT_MODEL, content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: reply }] }),
+  });
+  check('only the text block is read, not thinking', result.notes, reply);
+  ok('the image actually reaches the request', sent && sent.messages[0].content[0].type === 'image');
+  const staged = offersFromNotesText(withWindow(result.notes, '21-24 Oct'), { source: 'screenshot' }).offers;
+  check('a screenshot reply stages one flight and one stay', staged.map((o) => o.category), ['travel', 'stay']);
+  check('a dollar fare from a screenshot keeps its currency', staged[0].price, { low: 612, high: 612, currency: 'USD' });
+  check('a screenshot reply keeps its window', staged.map((o) => o.window), ['21-24 Oct', '21-24 Oct']);
+
+  let refusal = '';
+  try {
+    await extractNotesFromImages([IMG], { client: fakeClient({ stop_reason: 'refusal', stop_details: { category: 'cyber' }, content: [] }) });
+  } catch (err) { refusal = err.message; }
+  ok('a refusal is reported, not treated as an empty capture', /declined/.test(refusal), refusal);
+
+  let empty = '';
+  try { await extractNotesFromImages([], {}); } catch (err) { empty = err.message; }
+  ok('no screenshots is refused before any API call', /No screenshots/.test(empty), empty);
+  let badType = '';
+  try { await extractNotesFromImages([{ mediaType: 'image/heic', data: 'x' }], { client: fakeClient({}) }); } catch (err) { badType = err.message; }
+  ok('an unsupported image type is refused before any API call', /not a supported image type/.test(badType), badType);
+}
+
 // ---- report --------------------------------------------------------------
 if (failures.length) {
   console.error(`\n✗ ${failures.length} failed, ${passed} passed\n`);

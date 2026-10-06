@@ -72,7 +72,15 @@ address bar.
 
 ## 📌 Capturing prices on iPhone
 
-The browser extension can't run on iPhone at all — no iOS browser, Chrome
+**Easiest: screenshot it.** Take a screenshot of your card portal's results,
+open the planner's **TripAgent capture** panel, pick the screenshot under
+**Screenshot**, and tap **Read screenshot**. Claude reads it into options you
+review before anything is added. This works for pages only you can see
+(logged in), on any device. It uses your own Anthropic API key, which stays
+in your browser and is sent only to api.anthropic.com — use a dedicated key
+with a spend limit.
+
+**Or the bookmarklet.** The browser extension can't run on iPhone at all — no iOS browser, Chrome
 included, supports extensions (Apple requires them all to run on Safari's
 engine). The substitute is a **bookmarklet**: a Safari bookmark that runs the
 same scraper the extension uses, then opens the planner with the result
@@ -131,7 +139,8 @@ one covers every site, which is exactly why there are several.
 | **Automatic scraping** (`extension/`) | Google Flights, Kayak, Skyscanner, Booking.com, Trainline, DB | none | a site redesigns |
 | **Bank travel portals** (`extension/` + `backend/`) | Capital One, Amex — in your logged-in session | none | a portal redesigns |
 | **Backend flight search** (`backend/`) | Amadeus, via `npm run backend` | fill a form | an API key expires |
-| **Screenshot transcription** (`scripts/extract-screenshot.mjs`) | a screenshot or a photo of handwritten notes | run the CLI | needs `ANTHROPIC_API_KEY` |
+| **Read screenshot** (TripAgent panel) | a screenshot of any page — including a card portal only you can see — on any device, iPhone included | pick the image, tap Read | needs your own Anthropic API key (a few cents per screenshot) |
+| **Screenshot transcription CLI** (`scripts/extract-screenshot.mjs`) | the same, from the command line | run the CLI | needs `ANTHROPIC_API_KEY` |
 
 The extension is not restricted to a list of sites: the first two rows work on
 whatever page you have open. The site-specific rows only buy *automatic*

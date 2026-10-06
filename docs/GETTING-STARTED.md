@@ -53,6 +53,15 @@ Travel, or any flight/hotel site — log in, and search your route and dates.
 - **If a bank portal still comes back empty:** select the price with your
   mouse, right-click → **Add "…" to Trip Planner**. This never fails,
   because there's nothing to scrape — you're handing it the text directly.
+- **On iPhone, or without the extension at all:** screenshot the results
+  page, then in the planner's **TripAgent capture** panel pick it under
+  **Screenshot** and tap **Read screenshot**. Claude reads the screenshot
+  into staged options. The first time, paste your Anthropic API key
+  (console.anthropic.com → API keys; create a dedicated key with a spend
+  limit) and tap **Remember key** — it stays in that browser only and is
+  sent only to api.anthropic.com. A screenshot costs a few cents to read.
+  Points/miles prices are noted but never counted as cash, and a price the
+  model can't make out is marked "price unclear" rather than guessed.
 
 Repeat for each option you want to compare — a few flight times, a few
 hotels, both through the portal and through a direct site if you want the

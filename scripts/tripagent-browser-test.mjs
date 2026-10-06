@@ -138,6 +138,56 @@ record('the bookmarklet-captured offer is the real one, not a placeholder',
   /Lakeview room/.test(await bookmarkletPage.locator('body').innerText()));
 await bookmarkletPage.close();
 
+// The fourth capture path: a screenshot read by Claude, for pages only the
+// user can see. api.anthropic.com is intercepted with a canned reply, so this
+// runs the real SDK in the real browser with no key and no cost — and checks
+// what actually leaves the page: the user's key, the image, the model.
+{
+  const shotPage = await browser.newPage();
+  let apiRequest = null;
+  await shotPage.route('https://api.anthropic.com/**', async (route) => {
+    const req = route.request();
+    const cors = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    };
+    if (req.method() === 'OPTIONS') { await route.fulfill({ status: 204, headers: cors }); return; }
+    apiRequest = { headers: req.headers(), body: JSON.parse(req.postData() || '{}') };
+    await route.fulfill({
+      status: 200,
+      headers: { ...cors, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 'msg_test', type: 'message', role: 'assistant', model: 'claude-opus-5-5',
+        stop_reason: 'end_turn', stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 1 },
+        content: [{ type: 'text', text: 'FLIGHT: NYC to PAR, 18:30-07:45, USD612, Air France\nHOTEL: Paris - Le Marais room, USD280/night x3' }],
+      }),
+    });
+  });
+  await shotPage.goto(BASE, { waitUntil: 'networkidle', timeout: 20_000 });
+  await shotPage.getByRole('button', { name: /TripAgent capture/i }).click();
+  await shotPage.locator('input[placeholder="sk-ant-..."]').fill('sk-ant-test-key');
+  // A real (1x1) PNG, so the browser's own image decode + canvas re-encode runs.
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  await shotPage.locator('input[type="file"]').setInputFiles({ name: 'portal.png', mimeType: 'image/png', buffer: png });
+  await shotPage.getByRole('button', { name: 'Read screenshot' }).click();
+  await shotPage.getByText(/Found \d+ option/).waitFor({ timeout: 15_000 }).catch(() => {});
+
+  const shotBody = await shotPage.locator('body').innerText();
+  record('a screenshot is read and its options are staged for review', /Found 2 options/.test(shotBody),
+    shotBody.match(/(Found .*|The API.*|Could not.*|API error.*)/)?.[0] || '(no status message)');
+  record('the screenshot\'s flight reaches staging with its own currency', /NYC → PAR/.test(shotBody) && /\$612/.test(shotBody));
+  record('the request carries the user\'s own key, sent only to the API', apiRequest && apiRequest.headers['x-api-key'] === 'sk-ant-test-key');
+  record('the request asks for the default model with refusal fallback',
+    apiRequest && apiRequest.body.model === 'claude-opus-5-5' && apiRequest.body.fallbacks === 'default');
+  record('the image is re-encoded as JPEG before upload (metadata stripped)',
+    apiRequest && apiRequest.body.messages[0].content[0].source.media_type === 'image/jpeg');
+  record('nothing from the screenshot reaches the plan until Add',
+    !(await shotPage.locator('table').filter({ has: shotPage.locator('th', { hasText: 'Group / Leg' }) }).locator('tbody tr').filter({ hasText: 'Air France' }).count()));
+  await shotPage.close();
+}
+
 // Envelopes that fail any part of the contract must be dropped silently.
 await page.evaluate(() => {
   const origin = window.location.origin;

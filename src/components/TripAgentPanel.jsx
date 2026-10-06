@@ -2,6 +2,22 @@ import React, { useState } from 'react';
 import useTripAgent from '../hooks/useTripAgent.js';
 import { offerCostText, rowCostIsParseable, offerPreviewRow, currenciesNeedingRate, offerFromLink, offerToRow, categoryForKind, rowFromQuickEntry } from '../utils/tripAgentOffers.js';
 import { costTextIssue } from '../utils/parseTripNotes.js';
+import { extractNotesFromImages, withWindow } from '../utils/screenshotExtract.js';
+import { imageFileToUpload } from '../utils/imageForUpload.js';
+
+// The user's own Anthropic key, kept only in this browser. localStorage can
+// throw (private browsing, blocked storage), so every access is guarded and
+// the panel still works with a key typed in for this session only.
+const KEY_STORAGE = 'tripagent:anthropic-api-key';
+function readStoredKey() {
+  try { return window.localStorage.getItem(KEY_STORAGE) || ''; } catch { return ''; }
+}
+function writeStoredKey(value) {
+  try {
+    if (value) window.localStorage.setItem(KEY_STORAGE, value);
+    else window.localStorage.removeItem(KEY_STORAGE);
+  } catch { /* storage blocked — the key just isn't remembered */ }
+}
 
 const CATEGORY_WHERE_LABEL = { travel: 'Route', stay: 'Place', activity: null };
 const CATEGORY_WHERE_PLACEHOLDER = { travel: 'IST → MUN', stay: 'Milan' };
@@ -24,7 +40,7 @@ function priceLabel(offer) {
 }
 
 export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = {}, existingStayGroups = [] }) {
-  const { offers, capturedRates, extension, search, runFlightSearch, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor } = useTripAgent();
+  const { offers, capturedRates, extension, search, runFlightSearch, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor, stageNotes } = useTripAgent();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ from: '', to: '', date: '', adults: '1', currency: 'EUR', window: defaultWindow });
   const [linkForm, setLinkForm] = useState({ url: '', note: '' });
@@ -59,6 +75,50 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
     setQuickForm((f) => ({ ...f, option: '', time: '', cost: '' }));
   }
   const quickCostIssue = quickForm.cost.trim() ? costTextIssue(quickForm.cost) : null;
+
+  // Read a screenshot — for a portal page only the user can see (logged in),
+  // on any device. The model transcribes it into notes lines; those are
+  // staged for review exactly like an extension capture.
+  const [savedKey, setSavedKey] = useState(readStoredKey);
+  const [keyDraft, setKeyDraft] = useState('');
+  const [shotFiles, setShotFiles] = useState([]);
+  const [shotWindow, setShotWindow] = useState(defaultWindow);
+  const [shot, setShot] = useState({ busy: false, error: null, message: null });
+  const fileInputRef = React.useRef(null);
+  const activeKey = savedKey || keyDraft.trim();
+
+  function saveKey() {
+    const value = keyDraft.trim();
+    if (!value) return;
+    writeStoredKey(value);
+    setSavedKey(value);
+    setKeyDraft('');
+  }
+  function forgetKey() {
+    writeStoredKey('');
+    setSavedKey('');
+  }
+  async function handleReadScreenshots(e) {
+    e.preventDefault();
+    if (!shotFiles.length || !activeKey) return;
+    setShot({ busy: true, error: null, message: null });
+    try {
+      const images = await Promise.all(shotFiles.map((f) => imageFileToUpload(f)));
+      const { notes, truncated } = await extractNotesFromImages(images, { apiKey: activeKey, browser: true });
+      const count = stageNotes(withWindow(notes, shotWindow), 'screenshot');
+      setShot({
+        busy: false,
+        error: null,
+        message: count
+          ? `Found ${count} option${count === 1 ? '' : 's'} — review ${count === 1 ? 'it' : 'them'} below before adding.${truncated ? ' The reply was cut short; some options may be missing.' : ''}`
+          : 'No priced options were recognized in that screenshot. Type the price in with Quick Add above instead.',
+      });
+      setShotFiles([]);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (err) {
+      setShot({ busy: false, error: err.message || String(err), message: null });
+    }
+  }
 
   function setField(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -221,6 +281,80 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
             Got a price from your own card portal, an email quote, or anywhere else the extension cannot reach?
             Type it straight in — it's added to the table immediately, exactly like any other row, and you can
             keep entering more options for the same {quickForm.category === 'stay' ? 'stay' : 'leg'} right after.
+          </p>
+
+          {/* Read a screenshot — the capture path that works on any device,
+              iPhone included, for pages only the user can see. */}
+          <form onSubmit={handleReadScreenshots} className="mb-2 pb-3 border-b border-slate-100">
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="text-[0.65rem] uppercase tracking-wide text-slate-500">
+                <span className="block mb-1">Screenshot</span>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => setShotFiles(Array.from(e.target.files || []))}
+                  className="text-xs normal-case max-w-[14rem]"
+                  aria-label="Screenshot of search results"
+                />
+              </label>
+              <label className="text-[0.65rem] uppercase tracking-wide text-slate-500">
+                <span className="block mb-1">Window</span>
+                <input
+                  type="text"
+                  value={shotWindow}
+                  onChange={(e) => setShotWindow(e.target.value)}
+                  placeholder="14-19 Aug"
+                  className="w-24 font-mono text-xs px-2 py-1.5 rounded border border-slate-300 focus:border-blue-400 focus:outline-none normal-case"
+                />
+              </label>
+              {!savedKey && (
+                <label className="text-[0.65rem] uppercase tracking-wide text-slate-500">
+                  <span className="block mb-1">Anthropic API key</span>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={keyDraft}
+                    onChange={(e) => setKeyDraft(e.target.value)}
+                    placeholder="sk-ant-..."
+                    className="w-40 font-mono text-xs px-2 py-1.5 rounded border border-slate-300 focus:border-blue-400 focus:outline-none normal-case"
+                  />
+                </label>
+              )}
+              {!savedKey && (
+                <button
+                  type="button"
+                  onClick={saveKey}
+                  disabled={!keyDraft.trim()}
+                  className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 hover:border-blue-500 disabled:text-slate-300"
+                >
+                  Remember key
+                </button>
+              )}
+              <button
+                type="submit"
+                disabled={shot.busy || !shotFiles.length || !activeKey}
+                className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:bg-slate-300"
+              >
+                {shot.busy ? `Reading ${shotFiles.length > 1 ? `${shotFiles.length} screenshots` : 'screenshot'}…` : 'Read screenshot'}
+              </button>
+            </div>
+            {savedKey && (
+              <p className="text-xs text-slate-500 mt-2">
+                API key saved in this browser only.{' '}
+                <button type="button" onClick={forgetKey} className="text-blue-600 underline">Forget it</button>
+              </p>
+            )}
+            {shot.error && <p className="text-xs text-red-600 mt-2">{shot.error}</p>}
+            {shot.message && <p className="text-xs text-green-700 mt-2">{shot.message}</p>}
+          </form>
+          <p className="text-xs text-slate-500 mb-3">
+            Screenshot your card portal's results (it only shows prices to you, logged in — no server can see
+            that page, but it can read a picture of it). Claude reads the screenshot into options you review
+            below before anything is added; a few cents per screenshot on your own Anthropic key, which is
+            sent only to api.anthropic.com and never to this site. Use a dedicated key with a spend limit set at
+            console.anthropic.com.
           </p>
 
           {/* Save a link as an activity — a reel, a blog post, a listing, plus

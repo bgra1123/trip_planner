@@ -179,8 +179,8 @@ await bookmarkletPage.close();
     shotBody.match(/(Found .*|The API.*|Could not.*|API error.*)/)?.[0] || '(no status message)');
   record('the screenshot\'s flight reaches staging with its own currency', /NYC → PAR/.test(shotBody) && /\$612/.test(shotBody));
   record('the request carries the user\'s own key, sent only to the API', apiRequest && apiRequest.headers['x-api-key'] === 'sk-ant-test-key');
-  record('the request asks for the default model with refusal fallback',
-    apiRequest && apiRequest.body.model === 'claude-opus-5-5' && apiRequest.body.fallbacks === 'default');
+  record('the request asks for the cheapest model, with no effort setting (Haiku rejects it)',
+    apiRequest && apiRequest.body.model === 'claude-haiku-4-5' && !apiRequest.body.output_config);
   record('the image is re-encoded as JPEG before upload (metadata stripped)',
     apiRequest && apiRequest.body.messages[0].content[0].source.media_type === 'image/jpeg');
   record('nothing from the screenshot reaches the plan until Add',

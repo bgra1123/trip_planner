@@ -139,7 +139,7 @@ one covers every site, which is exactly why there are several.
 | **Automatic scraping** (`extension/`) | Google Flights, Kayak, Skyscanner, Booking.com, Trainline, DB | none | a site redesigns |
 | **Bank travel portals** (`extension/` + `backend/`) | Capital One, Amex — in your logged-in session | none | a portal redesigns |
 | **Backend flight search** (`backend/`) | Amadeus, via `npm run backend` | fill a form | an API key expires |
-| **Read screenshot** (TripAgent panel) | a screenshot of any page — including a card portal only you can see — on any device, iPhone included | pick the image, tap Read | needs your own Anthropic API key (a few cents per screenshot) |
+| **Read screenshot** (TripAgent panel) | a screenshot of any page — including a card portal only you can see — on any device, iPhone included | pick the image, tap Read | needs your own Anthropic API key (well under a cent per screenshot, using Claude Haiku) |
 | **Screenshot transcription CLI** (`scripts/extract-screenshot.mjs`) | the same, from the command line | run the CLI | needs `ANTHROPIC_API_KEY` |
 
 The extension is not restricted to a list of sites: the first two rows work on

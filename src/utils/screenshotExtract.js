@@ -10,11 +10,18 @@
 // Node CLI (scripts/extract-screenshot.mjs). The SDK is imported lazily so it
 // is only downloaded in the browser when someone actually reads a screenshot.
 
-export const SCREENSHOT_MODEL = 'claude-opus-5-5';
+// The cheapest model ($1/$5 per MTok) — reading prices off a screenshot is
+// transcription, not reasoning. Override per call (CLI: --model) for harder
+// images; models that support it get refusal fallback automatically.
+export const SCREENSHOT_MODEL = 'claude-haiku-4-5';
 
-// The model reads images up to this long edge; anything larger is downscaled
-// by the API anyway, so the browser resizes first and uploads less.
-export const MAX_IMAGE_EDGE = 2576;
+// Haiku reads images up to this long edge; anything larger is downscaled by
+// the API anyway, so the browser resizes first and uploads less.
+export const MAX_IMAGE_EDGE = 1568;
+
+// Server-side refusal fallback is documented for these models only; sending
+// it to others (Haiku 4.5 included) risks a 400.
+const FALLBACK_MODELS = /^claude-(opus-5|fable-5|sonnet-5-5)/;
 
 export const SUPPORTED_MEDIA_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 
@@ -49,14 +56,14 @@ export function cleanModelText(text) {
 }
 
 export function buildScreenshotRequest(images, { model } = {}) {
+  const chosen = model || SCREENSHOT_MODEL;
   return {
-    model: model || SCREENSHOT_MODEL,
+    model: chosen,
     max_tokens: 16000,
-    output_config: { effort: 'medium' },
     // Refusal fallback: if the model declines, the API re-runs the request on
-    // a fallback model instead of returning nothing.
-    betas: ['server-side-fallback-2026-07-01'],
-    fallbacks: 'default',
+    // a fallback model instead of returning nothing. (No `effort` here —
+    // Haiku 4.5 rejects it, and the others' defaults are fine for this job.)
+    ...(FALLBACK_MODELS.test(chosen) ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' } : {}),
     messages: [{
       role: 'user',
       content: [

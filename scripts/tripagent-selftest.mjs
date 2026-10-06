@@ -725,8 +725,13 @@ for (const blocked of ['chrome://settings', 'about:blank', 'devtools://devtools/
   const IMG = { mediaType: 'image/jpeg', data: 'AAAA' };
 
   const req = buildScreenshotRequest([IMG, IMG]);
-  check('screenshot request uses the default model', req.model, SCREENSHOT_MODEL);
-  check('screenshot request opts into refusal fallback', [req.fallbacks, req.betas], ['default', ['server-side-fallback-2026-07-01']]);
+  check('screenshot request uses the cheapest model by default', req.model, 'claude-haiku-4-5');
+  check('screenshot request uses the default model constant', req.model, SCREENSHOT_MODEL);
+  // Haiku 4.5 rejects `effort`, and refusal fallback isn't documented for it.
+  ok('a Haiku request carries no effort and no fallback',
+    !('output_config' in req) && !('fallbacks' in req) && !('betas' in req), JSON.stringify(Object.keys(req)));
+  const opusReq = buildScreenshotRequest([IMG], { model: 'claude-opus-5-5' });
+  check('an Opus override opts into refusal fallback', [opusReq.fallbacks, opusReq.betas], ['default', ['server-side-fallback-2026-07-01']]);
   const blocks = req.messages[0].content;
   check('every screenshot becomes an image block, prompt last', blocks.map((b) => b.type), ['image', 'image', 'text']);
   check('image blocks carry base64 source', blocks[0].source, { type: 'base64', media_type: 'image/jpeg', data: 'AAAA' });

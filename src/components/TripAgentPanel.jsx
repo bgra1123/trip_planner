@@ -352,7 +352,7 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
           <p className="text-xs text-slate-500 mb-3">
             Screenshot your card portal's results (it only shows prices to you, logged in — no server can see
             that page, but it can read a picture of it). Claude reads the screenshot into options you review
-            below before anything is added; a few cents per screenshot on your own Anthropic key, which is
+            below before anything is added; well under a cent per screenshot (Claude Haiku) on your own Anthropic key, which is
             sent only to api.anthropic.com and never to this site. Use a dedicated key with a spend limit set at
             console.anthropic.com.
           </p>

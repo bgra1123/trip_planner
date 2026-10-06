@@ -59,7 +59,7 @@ Travel, or any flight/hotel site — log in, and search your route and dates.
   into staged options. The first time, paste your Anthropic API key
   (console.anthropic.com → API keys; create a dedicated key with a spend
   limit) and tap **Remember key** — it stays in that browser only and is
-  sent only to api.anthropic.com. A screenshot costs a few cents to read.
+  sent only to api.anthropic.com. A screenshot costs well under a cent to read (it uses Claude Haiku, the cheapest model).
   Points/miles prices are noted but never counted as cash, and a price the
   model can't make out is marked "price unclear" rather than guessed.
 

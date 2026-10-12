@@ -707,7 +707,8 @@ for (const blocked of ['chrome://settings', 'about:blank', 'devtools://devtools/
   const doc = { querySelectorAll: (sel) => (sel === 'li' ? nodes : []) };
   const got = scrapers.scrape(doc, 'https://travel.capitalone.com/flights/shop/?origin=NYC&destination=PAR', null);
   check('all three result cards are captured', got.length, 3);
-  check('the route comes from the card\'s airports, not the url\'s city codes', [got[0].from, got[0].to], ['JFK', 'CDG']);
+  check('the leg is the city pair, from the card\'s own airports', [got[0].from, got[0].to], ['NYC', 'PAR']);
+  ok('the exact airports are kept in the detail', /airports: JFK → CDG/.test(got[0].detail), got[0].detail);
   check('the airline printed twice is read once', [got[0].carrier, got[2].carrier], ['Delta', 'Air France']);
   check('times and duration', [got[0].departure, got[0].arrival, got[0].duration], ['5:30 PM', '5:45 AM', '7h 15m']);
   check('a comma price keeps its dollar sign', got[0].price, '$1,062');
@@ -721,6 +722,25 @@ for (const blocked of ['chrome://settings', 'about:blank', 'devtools://devtools/
   // The same cards if only textContent exists and elements ran together.
   const glued = cards.map((t) => ({ textContent: t.replace(/\n/g, ' ') }));
   const gotGlued = scrapers.scrape({ querySelectorAll: (sel) => (sel === 'li' ? glued : []) }, 'https://travel.capitalone.com/flights/shop/', null);
+  // The phone layout (price + perk banner first, route last), mixed airports.
+  const phone = [
+    ['Earn 5X miles on flights', '$759', 'Best Price, Best Overall', '11:00 PM', '7h 10m', '11:10 AM', 'French bee', 'Bee Light', 'Nonstop', 'EWR - ORY'],
+    ['Earn 5X miles on flights', '$1,062', 'Fastest, Best Quality', '6:05 PM', '7h 5m', '6:10 AM', 'Delta', 'Delta Main Basic', 'Nonstop', 'EWR - CDG'],
+    ['Earn 5X miles on flights', '$809', '11:00 PM', '7h 10m', '11:10 AM', 'Air Caraïbes', 'Eco Basic', 'Nonstop', 'EWR - ORY'],
+  ].map((l) => ({ innerText: l.join('\n'), textContent: l.join('') }));
+  const gotPhone = scrapers.scrape({ querySelectorAll: (sel) => (sel === 'li' ? phone : []) }, 'https://travel.capitalone.com/flights/shop/', null);
+  check('all three phone cards are captured', gotPhone.length, 3);
+  check('EWR-ORY and EWR-CDG are alternatives for one NYC → PAR leg',
+    new Set(gotPhone.map((o) => `${o.from} → ${o.to}`)).size, 1);
+  check('phone layout: airline and fare', gotPhone.map((o) => [o.carrier, /fare: ([^·]+)/.exec(o.detail)[1].trim()]),
+    [['French bee', 'Bee Light'], ['Delta', 'Delta Main Basic'], ['Air Caraïbes', 'Eco Basic']]);
+  check('phone layout: prices keep dollars and commas', gotPhone.map((o) => o.price), ['$759', '$1,062', '$809']);
+  ok('"Best Price" and "Earn 5X" badges are not the airline or fare', gotPhone.every((o) => !/Best|Earn|Fastest/.test(o.carrier) && !/Best Price|Earn 5X/.test(o.detail)), JSON.stringify(gotPhone.map((o) => [o.carrier, o.detail])));
+  ok('the airports are kept per result', /airports: EWR → ORY/.test(gotPhone[0].detail) && /airports: EWR → CDG/.test(gotPhone[1].detail));
+  const phoneOffers = normalizeOffers([...got, ...gotPhone], {});
+  check('desktop JFK-CDG and phone EWR-ORY results share one group', new Set(phoneOffers.map((o) => o.group)).size, 1);
+  check('a one-airport city keeps its own code', scrapers.metroOf('MUC'), 'MUC');
+
   check('space-separated text reads the same', gotGlued.map((o) => [o.from, o.to, o.carrier, o.price]), got.map((o) => [o.from, o.to, o.carrier, o.price]));
 }
 

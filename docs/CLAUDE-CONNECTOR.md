@@ -109,6 +109,12 @@ first:
 3. **The Chrome extension** (desktop): one click on the results page, no Claude
    needed.
 
+Legs are recorded between cities, not airports: results from Newark, JFK and
+LaGuardia to Orly or Charles de Gaulle all become alternatives for one
+New York → Paris leg, with the exact airports in the option's note. (The
+Chrome extension does the same.) The same goes for the phone layout and the
+desktop layout, which order a result's parts differently.
+
 Claude records the cash price in the card's currency (usually USD), puts any
 miles/points price in the note, never counts points as cash, and notes the
 program for hotels (for example Amex Fine Hotels + Resorts). Each option keeps a

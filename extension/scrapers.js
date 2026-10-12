@@ -292,6 +292,52 @@ var TripAgentScrapers = (function () {
     return m && m[1] !== m[2] ? { from: m[1], to: m[2], at: m.index, length: m[0].length } : null;
   }
 
+  // Cities with several airports. A result is a leg between cities: EWR-ORY,
+  // JFK-CDG and LGA-CDG are all alternatives for NYC -> PAR, and the planner
+  // only compares options inside one leg. These are IATA metropolitan codes
+  // (a fact table, not a guess); an airport not listed keeps its own code.
+  var METRO = {
+    JFK: 'NYC', EWR: 'NYC', LGA: 'NYC', CDG: 'PAR', ORY: 'PAR', BVA: 'PAR',
+    LHR: 'LON', LGW: 'LON', STN: 'LON', LTN: 'LON', LCY: 'LON', SEN: 'LON',
+    MXP: 'MIL', LIN: 'MIL', BGY: 'MIL', FCO: 'ROM', CIA: 'ROM',
+    IAD: 'WAS', DCA: 'WAS', BWI: 'WAS', ORD: 'CHI', MDW: 'CHI',
+    HND: 'TYO', NRT: 'TYO', KIX: 'OSA', ITM: 'OSA', ICN: 'SEL', GMP: 'SEL',
+    PEK: 'BJS', PKX: 'BJS', PVG: 'SHA', SHA: 'SHA', SVO: 'MOW', DME: 'MOW', VKO: 'MOW',
+    ARN: 'STO', BMA: 'STO', NYO: 'STO', IST: 'IST', SAW: 'IST',
+    EZE: 'BUE', AEP: 'BUE', GRU: 'SAO', CGH: 'SAO', VCP: 'SAO', GIG: 'RIO', SDU: 'RIO',
+    YYZ: 'YTO', YTZ: 'YTO', YUL: 'YMQ', YMX: 'YMQ', IAH: 'HOU', HOU: 'HOU'
+  };
+  function metroOf(code) { return METRO[code] || code; }
+
+  // Cards are read line by line when the browser gives us line breaks
+  // (innerText): each line is one thing, so the order the site happens to lay
+  // them out in (price first on a phone, times first on a desktop) stops mattering.
+  var LINE_TIME = /^\d{1,2}:\d{2}(?:\s?(?:AM|PM))?$/i;
+  var LINE_DURATION = /^(?:\d{1,2}\s?h(?:r|rs)?(?:\s?\d{1,2}\s?m(?:in)?)?|\d{1,3}\s?m(?:in)?)$/i;
+  var LINE_PRICE = /^(?:[€$£₺]\s?[\d,.]+|(?:EUR|USD|GBP|TRY|CHF)\s?[\d,.]+)(?:\s.*)?$/i;
+  var LINE_STOPS = /^(?:nonstop|direct|\d\s?stops?\b.*)$/i;
+  var LINE_ROUTE = /^[A-Z]{3}\s?[-\u2013\u2192]\s?[A-Z]{3}$/;
+  var LINE_NOISE = /^(?:earn\b|select\b|details\b|show\b|view\b)|\b(?:best|fastest|cheapest|recommended|popular|lowest)\b|miles\b|points\b|pts\b/i;
+
+  function cardLines(node) {
+    var raw = node && node.innerText;
+    if (!raw || raw.indexOf('\n') === -1) return null;
+    var lines = raw.split(/\n+/).map(function (l) { return l.replace(/\s+/g, ' ').trim(); }).filter(Boolean);
+    return lines.length >= 4 ? lines : null;
+  }
+
+  // Of the lines that are none of the above, the first is the airline and the
+  // next different one is the fare name ("Delta Main Basic", "Bee Light").
+  function carrierAndFareFromLines(lines) {
+    var others = [];
+    lines.forEach(function (l) {
+      if (LINE_TIME.test(l) || LINE_DURATION.test(l) || LINE_PRICE.test(l) || LINE_STOPS.test(l) || LINE_ROUTE.test(l) || LINE_NOISE.test(l)) return;
+      if (others.length && others[others.length - 1].toLowerCase() === l.toLowerCase()) return; // the airline printed twice
+      others.push(l);
+    });
+    return { carrier: others[0] ? others[0].slice(0, 40) : '', fare: others[1] ? others[1].slice(0, 60) : '' };
+  }
+
   // "Delta Delta" -> "Delta"
   function collapseRepeat(name) {
     var m = /^(.{2,40}?)\s+\1$/i.exec(String(name).trim());
@@ -351,7 +397,11 @@ var TripAgentScrapers = (function () {
       // The card's own airports beat the page URL's (which may be city codes
       // like NYC, or a different leg of the trip).
       var cardRoute = routeFromCard(content);
-      var parts = carrierAndFare(content, cardRoute);
+      var lines = cardLines(node);
+      var parts = lines ? carrierAndFareFromLines(lines) : carrierAndFare(content, cardRoute);
+      var legFrom = cardRoute ? metroOf(cardRoute.from) : (route ? route.from : '');
+      var legTo = cardRoute ? metroOf(cardRoute.to) : (route ? route.to : '');
+      if (cardRoute && (legFrom !== cardRoute.from || legTo !== cardRoute.to)) detail.push('airports: ' + cardRoute.from + ' \u2192 ' + cardRoute.to);
       if (parts.fare) detail.push('fare: ' + parts.fare);
       // An arrival clock earlier than the departure clock means the next day
       // (local times, and no flight is over 24 hours here).
@@ -361,8 +411,8 @@ var TripAgentScrapers = (function () {
 
       offers.push({
         kind: 'flight',
-        from: cardRoute ? cardRoute.from : (route ? route.from : ''),
-        to: cardRoute ? cardRoute.to : (route ? route.to : ''),
+        from: legFrom,
+        to: legTo,
         carrier: parts.carrier || collapseRepeat(carrierFrom(content)),
         departure: times[0] || '',
         arrival: times[1] || '',
@@ -410,7 +460,7 @@ var TripAgentScrapers = (function () {
   return {
     scrape: scrape, detectSite: detectSite, routeFromUrl: routeFromUrl,
     placeFromUrl: placeFromUrl, pointsIn: pointsIn, cashPriceIn: cashPriceIn,
-    guessKind: guessKind, BANK_PORTALS: BANK_PORTALS, routeFromCard: routeFromCard, collapseRepeat: collapseRepeat,
+    guessKind: guessKind, BANK_PORTALS: BANK_PORTALS, routeFromCard: routeFromCard, collapseRepeat: collapseRepeat, metroOf: metroOf,
   };
 })();
 

@@ -115,6 +115,14 @@ New York → Paris leg, with the exact airports in the option's note. (The
 Chrome extension does the same.) The same goes for the phone layout and the
 desktop layout, which order a result's parts differently.
 
+Whether a portal's price is **per traveler** or for everyone isn't something
+Claude assumes: it asks you (per traveler or total, how many are travelling,
+round trip or one way), records the total, and notes how it got there
+("$1,062 per traveler × 2"). It won't ask twice in the same conversation. In the
+Chrome extension, tick **Prices are per traveler** and set **Travelers** in the
+popup, and Capital One and Amex flight prices are multiplied for you; with the
+box unticked prices are kept exactly as shown.
+
 Claude records the cash price in the card's currency (usually USD), puts any
 miles/points price in the note, never counts points as cash, and notes the
 program for hotels (for example Amex Fine Hotels + Resorts). Each option keeps a

@@ -46,6 +46,15 @@ Chrome asks you once to allow the extension to reach it.
 With no TripAgent URL, or if it can't be reached, captures are pushed into an
 open planner tab, exactly as before, and the popup says why.
 
+## Travelers
+
+Whether a portal quotes prices per traveler is your call, not the extension's.
+If yours does, tick **Prices are per
+traveler** and set **Travelers** in the popup: Capital One and Amex flight
+prices are then multiplied, with "$1,062 per traveler × 2" noted in the option's
+detail. With the box unticked, prices are kept exactly as shown. Other sites and
+hotels are never multiplied.
+
 ## Selected prices
 
 1. Select the price/fare/rate text on any page

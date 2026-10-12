@@ -156,6 +156,59 @@ try {
     await api('/active', { method: 'PUT', body: JSON.stringify({ tripId: 'tripOPEN001' }) });
   }
 
+  // -- per-traveler totals: only when the user says so --
+  {
+    const { chrome, send } = loadBackground();
+    await send({ type: 'SET_CONNECTOR', url: CONNECTOR_URL });
+    await api('/trips/tripTRAV001', { method: 'PUT', body: JSON.stringify({ title: 'Travelers', snapshot: { rows: [], notes: [], rateRows: [] } }) });
+    await api('/active', { method: 'PUT', body: JSON.stringify({ tripId: 'tripTRAV001' }) });
+    const flight = (price, source = 'capital-one') => ({ kind: 'flight', from: 'NYC', to: 'PAR', departure: '6:05 PM', arrival: '6:10 AM', carrier: 'Delta', price, source, detail: 'fare: Delta Main Basic' });
+    const waiting = async () => (await api('/trips/tripTRAV001/pending')).offers;
+    const setOpts = (travelers, perTraveler) => send({ type: 'SET_OPTIONS', options: { from: '', to: '', window: '', travelers, perTraveler } });
+
+    // Nothing is assumed: with no setting the price is exactly as shown.
+    await send({ type: 'CAPTURED', offers: [flight('$1,062')], site: 'capital-one' });
+    let got = await waiting();
+    record('with no setting a portal price is kept exactly as shown', got.length === 1 && got[0].price.low === 1062 && !/per traveler/.test(got[0].detail), JSON.stringify(got));
+
+    await setOpts('2', false);
+    await send({ type: 'CAPTURED', offers: [flight('$555')], site: 'capital-one' });
+    got = await waiting();
+    record('Travelers alone does not multiply (the user has not said it is per traveler)', got.some((o) => o.price.low === 555));
+
+    await setOpts('2', true);
+    await send({ type: 'CAPTURED', offers: [flight('$1,062.50'), flight('$809')], site: 'capital-one' });
+    got = await waiting();
+    const two = got.find((o) => o.price.low === 2125);
+    record('ticking per traveler with 2 travelers doubles a bank-portal flight price', !!two && two.price.currency === 'USD', JSON.stringify(got.map((o) => o.price)));
+    record('…keeping the dollar sign and cents', got.some((o) => o.price.low === 1618));
+    record('…and saying how it was totalled', !!two && /\$1,062\.50 per traveler × 2/.test(two.detail) && /fare: Delta Main Basic/.test(two.detail), two && two.detail);
+
+    await send({ type: 'CAPTURED', offers: [flight('$410', 'amex')], site: 'amex' });
+    got = await waiting();
+    record('Amex is a bank portal too, so the same setting applies', got.some((o) => o.price.low === 820));
+
+    await send({ type: 'CAPTURED', offers: [flight('$500', 'kayak')], site: 'kayak' });
+    got = await waiting();
+    record('another site\'s price is never multiplied', got.some((o) => o.price.low === 500));
+
+    await send({ type: 'CAPTURED', offers: [{ kind: 'hotel', place: 'Paris', label: 'H', price: '$300', source: 'capital-one' }], site: 'capital-one' });
+    got = await waiting();
+    record('a hotel is not multiplied (a room is not per traveler)', got.some((o) => o.category === 'stay' && o.price.low === 300));
+
+    await setOpts('1', true);
+    await send({ type: 'CAPTURED', offers: [flight('$777')], site: 'capital-one' });
+    got = await waiting();
+    record('one traveler leaves the price as shown', got.some((o) => o.price.low === 777 && !/per traveler/.test(o.detail)));
+
+    await setOpts('3', true);
+    await send({ type: 'CAPTURED', offers: [flight('Price on request')], site: 'capital-one' });
+    void chrome;
+    await api('/trips/tripTRAV001', { method: 'DELETE' });
+    await api('/trips/tripOPEN001', { method: 'PUT', body: JSON.stringify({ title: 'Paris', snapshot: { rows: [], notes: [], rateRows: [] } }) });
+    await api('/active', { method: 'PUT', body: JSON.stringify({ tripId: 'tripOPEN001' }) });
+  }
+
   // -- following the open trip --
   {
     const { chrome, send } = loadBackground();

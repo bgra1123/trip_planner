@@ -12,7 +12,7 @@
   'use strict';
 
   var $ = function (id) { return document.getElementById(id); };
-  var OVERRIDE_FIELDS = ['from', 'to', 'window'];
+  var OVERRIDE_FIELDS = ['from', 'to', 'window', 'travelers'];
 
   var captures = [];
   var offers = [];
@@ -42,6 +42,8 @@
       from: $('from').value.trim().toUpperCase(),
       to: $('to').value.trim().toUpperCase(),
       window: $('window').value.trim(),
+      travelers: $('travelers').value.trim(),
+      perTraveler: $('per-traveler').checked,
     };
   }
 
@@ -226,12 +228,15 @@
     OVERRIDE_FIELDS.forEach(function (f) {
       $(f).value = (state.options && state.options[f]) || '';
     });
+    $('per-traveler').checked = !!(state.options && state.options.perTraveler);
     renderAll(state);
   }
 
   OVERRIDE_FIELDS.forEach(function (f) {
     $(f).addEventListener('change', function () { send({ type: 'SET_OPTIONS', options: overrides() }); });
   });
+
+  $('per-traveler').addEventListener('change', function () { send({ type: 'SET_OPTIONS', options: overrides() }); });
 
   $('copy-btn').addEventListener('click', function () {
     if (!captures.length) { showStatus('Nothing to copy yet.', true); return; }

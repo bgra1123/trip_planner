@@ -47,8 +47,10 @@
       <label>From <input id="from" placeholder="IST" maxlength="4" /></label>
       <label>To <input id="to" placeholder="MUC" maxlength="4" /></label>
       <label>Window <input id="window" placeholder="14-19 Aug" /></label>
+      <label>Travelers <input id="travelers" type="number" min="1" max="9" placeholder="1" style="width:3.5em" /></label>
+      <label style="flex-basis:100%"><input id="per-traveler" type="checkbox" /> Portal prices are per traveler (multiply by Travelers)</label>
     </div>
-    <p class="hint">Overrides fill in what a page URL doesn’t say, and are saved for next time.</p>
+    <p class="hint">Overrides fill in what a page URL doesn’t say, and are saved for next time. Tick \u201cper traveler\u201d only if your portal quotes flights per person, and Capital One and Amex flight prices are multiplied by Travelers.</p>
     <div id="offers-empty" class="empty" hidden>
       Nothing scraped yet. Open any flight or hotel search and hit <strong>Capture this page</strong>.
     </div>

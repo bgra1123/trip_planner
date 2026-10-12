@@ -105,7 +105,7 @@ async function writeCaptures(captures) {
 
 async function readOptions() {
   const store = await chrome.storage.local.get(OPTIONS_KEY);
-  return store[OPTIONS_KEY] || { from: '', to: '', window: '' };
+  return store[OPTIONS_KEY] || { from: '', to: '', window: '', travelers: '', perTraveler: false };
 }
 
 // One badge for both queues — the user cares how much is waiting, not which
@@ -127,6 +127,38 @@ function offerKey(offer) {
     typeof offer.price === 'object' && offer.price ? JSON.stringify(offer.price) : (offer.price || ''),
     offer.label || '',
   ].join('|');
+}
+
+// Bank portals read from the user's logged-in session. Whether a portal's
+// price is per traveler is the user's to say (the "Prices are per traveler"
+// box in the popup), not something to hard-code: portals differ and change.
+const BANK_SOURCES = ['capital-one', 'amex'];
+
+// "$1,062" x 2 -> "$2,124". Anything that isn't a plain symbol-or-code + amount
+// is left untouched rather than guessed at.
+function scalePrice(price, n) {
+  if (typeof price !== 'string') return null;
+  const m = /^\s*([€$£₺]|[A-Z]{3}\s?)\s?(\d[\d,]*(?:\.\d+)?)\s*$/.exec(price);
+  if (!m) return null;
+  const amount = parseFloat(m[2].replace(/,/g, '')) * n;
+  const text = amount.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  return { price: m[1] + text, each: m[1] + m[2] };
+}
+
+// When the user has said the portal's prices are per traveler and how many are
+// travelling, total bank-portal flight prices. Otherwise nothing changes: the
+// planner adds prices up as shown, so this is the user's call, never a guess.
+async function withTravelers(offers) {
+  const options = await readOptions();
+  const n = Math.round(Number(options.travelers));
+  if (!options.perTraveler || !(n >= 2)) return offers;
+  return offers.map((o) => {
+    if (!o || o.kind !== 'flight' || BANK_SOURCES.indexOf(o.source) === -1 || !o.price) return o;
+    const scaled = scalePrice(o.price, n);
+    const note = (extra) => ({ ...o, detail: [o.detail, extra].filter(Boolean).join(' · ') });
+    if (!scaled) return note('price is per traveler (could not total it)');
+    return { ...note(scaled.each + ' per traveler \u00d7 ' + n), price: scaled.price };
+  });
 }
 
 async function addOffers(incoming) {
@@ -259,7 +291,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     switch (message.type) {
       case 'CAPTURED': {
-        const offers = message.offers || [];
+        const offers = await withTravelers(message.offers || []);
         const result = await addOffers(offers);
         // Only when something new was found: automatic capture fires on every
         // page change, and the same results shouldn't be re-posted each time.
@@ -333,7 +365,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ ok: false, error: err.message });
           break;
         }
-        const offers = (reply && reply.offers) || [];
+        const offers = await withTravelers((reply && reply.offers) || []);
         const result = await addOffers(offers);
         // TripAgent first (dedupes server-side, so everything found is sent);
         // an open planner tab only when that isn't available.

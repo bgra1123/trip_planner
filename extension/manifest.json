@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TripAgent Capture",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Capture flight, train and hotel prices from any page — right-click a price, or click Capture on whatever site you have open. Sends them to your Trip Planner.",
   "permissions": [
     "contextMenus",
@@ -15,7 +15,11 @@
     "http://127.0.0.1:3000/*",
     "https://bgra1123.github.io/trip_planner/*",
     "http://localhost:8787/*",
-    "http://127.0.0.1:8787/*"
+    "http://127.0.0.1:8787/*",
+    "https://*.workers.dev/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
   ],
   "background": {
     "service_worker": "background.js"

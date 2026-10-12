@@ -81,3 +81,11 @@ export async function ackOffers(connectorUrl, tripId, ids) {
   if (!apiBase || !ids.length) return null;
   return request(apiBase, `${tripPath(tripId)}/ack`, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ ids }) }, { allow404: true });
 }
+
+// Tell the server which trip is open here, so captures from tools that have no
+// trip of their own (the browser extension) land in it. Best effort: a failure
+// only means captures go to the server's fallback (the only trip), or are
+// refused with a clear message.
+export function setActiveRemoteTrip(connectorUrl, id) {
+  return request(baseOrThrow(connectorUrl), '/active', { method: 'PUT', headers: JSON_HEADERS, body: JSON.stringify({ tripId: id }) });
+}

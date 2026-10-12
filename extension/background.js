@@ -26,6 +26,55 @@ const MENU_ID = 'trip-planner-capture';
 // failed post is never surfaced as an error.
 const DEFAULT_BACKEND = 'http://localhost:8787';
 
+// ---- TripAgent server -------------------------------------------------------
+// The one place trips live. Captures are posted to whichever trip is open in
+// the planner and wait there for the user's Add, so they show up on any
+// device and Claude can see them — and no planner tab needs to be open. If it
+// is unset or unreachable we fall back to pushing into an open planner tab,
+// exactly as before.
+const CONNECTOR_KEY = 'tripagent:connector-url';
+
+// https://host/mcp/TOKEN  ->  https://host/api/TOKEN
+function apiBaseOf(connectorUrl) {
+  try {
+    var url = new URL(String(connectorUrl || '').trim());
+    var match = url.pathname.match(/^\/mcp\/([^/]+)\/?$/);
+    var local = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+    if (!match || (url.protocol !== 'https:' && !local)) return null;
+    return url.origin + '/api/' + match[1];
+  } catch (err) {
+    return null;
+  }
+}
+
+async function readConnector() {
+  const store = await chrome.storage.local.get(CONNECTOR_KEY);
+  return typeof store[CONNECTOR_KEY] === 'string' ? store[CONNECTOR_KEY] : '';
+}
+
+// Post a capture to the open trip. Resolves { ok, title, recorded } or
+// { ok: false, error, notConfigured }.
+async function sendToServer(payload) {
+  const url = await readConnector();
+  const base = apiBaseOf(url);
+  if (!base) return { ok: false, notConfigured: true, error: 'TripAgent is not set up in this extension.' };
+  let res;
+  try {
+    res = await fetch(base + '/trips/active/offers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    return { ok: false, error: 'Could not reach TripAgent.' };
+  }
+  let body = null;
+  try { body = await res.json(); } catch (err) { /* non-JSON error page */ }
+  if (res.ok && body) return { ok: true, title: body.title, recorded: body.recorded };
+  if (res.status === 404) return { ok: false, error: 'TripAgent did not recognize the saved URL.' };
+  return { ok: false, error: (body && body.message) || ('TripAgent answered ' + res.status + '.') };
+}
+
 const PLANNER_URLS = [
   'http://localhost:3000/*',
   'http://127.0.0.1:3000/*',
@@ -279,10 +328,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
       }
       case 'GET_STATE': {
-        const [offers, captures, options, tabs] = await Promise.all([
-          readOffers(), readCaptures(), readOptions(), plannerTabs(),
+        const [offers, captures, options, tabs, connectorUrl] = await Promise.all([
+          readOffers(), readCaptures(), readOptions(), plannerTabs(), readConnector(),
         ]);
-        sendResponse({ ok: true, version: version(), offers, captures, options, plannerTabs: tabs.length });
+        sendResponse({ ok: true, version: version(), offers, captures, options, plannerTabs: tabs.length, connectorUrl });
+        break;
+      }
+      case 'SET_CONNECTOR': {
+        const url = String(message.url || '').trim();
+        if (url && !apiBaseOf(url)) { sendResponse({ ok: false, error: 'That is not a TripAgent URL \u2014 it should look like https://\u2026/mcp/<token>.' }); break; }
+        if (url) await chrome.storage.local.set({ [CONNECTOR_KEY]: url });
+        else await chrome.storage.local.remove(CONNECTOR_KEY);
+        sendResponse({ ok: true });
+        break;
+      }
+      // The planner page announces its connector. It only fills in a blank:
+      // a URL the user chose in the popup is never overwritten by a page.
+      case 'PAGE_CONNECTOR': {
+        if (!(await readConnector()) && apiBaseOf(message.url)) {
+          await chrome.storage.local.set({ [CONNECTOR_KEY]: String(message.url).trim() });
+        }
+        sendResponse({ ok: true });
         break;
       }
       case 'SET_OPTIONS': {
@@ -302,17 +368,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         const offers = (reply && reply.offers) || [];
         const result = await addOffers(offers);
+        // TripAgent first (dedupes server-side, so everything found is sent);
+        // an open planner tab only when that isn't available.
+        const server = offers.length ? await sendToServer({ offers, source: 'extension' }) : { ok: false, notConfigured: true };
         if (result.added) {
-          await pushToPlanner({ type: 'PUSH_OFFERS', offers });
+          if (!server.ok) await pushToPlanner({ type: 'PUSH_OFFERS', offers });
           if (reply && reply.isBankPortal) await forwardToBackend(reply.site, offers, message.overrides);
         }
-        sendResponse({ ok: true, captured: offers.length, site: reply && reply.site, ...result });
+        sendResponse({ ok: true, captured: offers.length, site: reply && reply.site, server, ...result });
         break;
       }
       case 'SEND_OFFERS_TO_PLANNER': {
         const offers = await readOffers();
         if (!offers.length) { sendResponse({ ok: true, delivered: 0, count: 0 }); break; }
-        sendResponse({ ok: true, delivered: await pushToPlanner({ type: 'PUSH_OFFERS', offers }), count: offers.length });
+        const server = await sendToServer({ offers, source: 'extension' });
+        sendResponse({ ok: true, server, delivered: server.ok ? 0 : await pushToPlanner({ type: 'PUSH_OFFERS', offers }), count: offers.length });
         break;
       }
       // Selection captures reach the planner as trip-notes lines, which the
@@ -321,7 +391,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'SEND_NOTES_TO_PLANNER': {
         const notes = String(message.notes || '');
         if (!notes.trim()) { sendResponse({ ok: true, delivered: 0 }); break; }
-        sendResponse({ ok: true, delivered: await pushToPlanner({ type: 'PUSH_NOTES', notes }) });
+        const server = await sendToServer({ notes, source: 'selection' });
+        sendResponse({ ok: true, server, delivered: server.ok ? 0 : await pushToPlanner({ type: 'PUSH_NOTES', notes }) });
         break;
       }
       default:

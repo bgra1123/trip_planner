@@ -49,6 +49,9 @@
       ask({ type: 'PAGE_REQUEST_OFFERS' }, sendOffers);
     } else if (data.type === 'CLEAR_OFFERS') {
       ask({ type: 'PAGE_CLEAR_OFFERS' }, function () {});
+    } else if (data.type === 'CONNECTOR' && typeof data.url === 'string') {
+      // The planner tells us where TripAgent is, so there is one setup, not two.
+      ask({ type: 'PAGE_CONNECTOR', url: data.url }, function () {});
     }
   });
 

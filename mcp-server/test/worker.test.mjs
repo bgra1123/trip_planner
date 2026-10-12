@@ -234,6 +234,62 @@ const PLAN = [
   ok('deleting a trip drops its pending options too', pendingOf(env, 'plannerTrip1').length === 0);
 }
 
+// ---- capture endpoint + active trip (browser extension, bookmarklet) ----
+{
+  const env = makeEnv();
+  const post = (path, body, raw) => api(env, 'POST', path, body).then((r) => r);
+  const scraped = [
+    { kind: 'flight', from: 'NYC', to: 'PAR', departure: '18:30', arrival: '07:45', carrier: 'Air France', price: { low: 612, high: 612, currency: 'USD' }, source: 'Kayak' },
+    { kind: 'hotel', place: 'Paris', label: 'Le Marais', price: { low: 280, high: 280, currency: 'USD' }, perNight: true, nights: 3 },
+  ];
+
+  const noTrips = await post('/trips/active/offers', { offers: scraped });
+  ok('capturing with no trips at all is a 409 telling the user what to do', noTrips.status === 409 && /Open a trip in the planner/.test((await noTrips.json()).message));
+
+  await api(env, 'PUT', '/trips/tripAAAAAA1', { title: 'Paris', snapshot: snapshotFrom([]) });
+  const single = await post('/trips/active/offers', { offers: scraped, source: 'extension' });
+  const singleBody = await single.json();
+  ok('with exactly one trip, "active" means that trip', single.status === 200 && singleBody.tripId === 'tripAAAAAA1' && singleBody.recorded === 2 && singleBody.title === 'Paris', JSON.stringify(singleBody));
+  const stored = pendingOf(env, 'tripAAAAAA1');
+  ok('captured offers are stored as normalized pending options', stored.length === 2 && stored[0].group && stored.every((o) => o.id && o.source));
+  ok('the scraper\'s own source is kept', stored.some((o) => o.source === 'Kayak'));
+
+  const again = await (await post('/trips/active/offers', { offers: scraped })).json();
+  ok('re-capturing the same page does not duplicate', again.waiting === 2, JSON.stringify(again));
+
+  // The same flight Claude records dedupes against the extension's capture.
+  await callTool(env, 'add_trip_options', { tripId: 'tripAAAAAA1', options: [{ kind: 'flight', from: 'NYC', to: 'PAR', departure: '18:30', arrival: '07:45', carrier: 'Air France', price: 612, currency: 'USD' }] });
+  ok('Claude and the extension share one review list', pendingOf(env, 'tripAAAAAA1').filter((o) => o.carrier === 'Air France').length === 1);
+
+  const notes = await (await post('/trips/active/offers', { notes: 'Flight: IST → MUN, 06:45-09:10, €210', source: 'selection' })).json();
+  ok('trip-notes lines are parsed by the planner\'s own grammar', notes.recorded === 1 && pendingOf(env, 'tripAAAAAA1').some((o) => o.group === 'IST → MUN' && o.price.low === 210 && o.price.currency === 'EUR'), JSON.stringify(notes));
+
+  await api(env, 'PUT', '/trips/tripBBBBBB2', { title: 'Rome', snapshot: snapshotFrom([]) });
+  const ambiguous = await post('/trips/active/offers', { offers: scraped });
+  ok('several trips and none open is a 409, not a guess', ambiguous.status === 409);
+
+  ok('the planner reports its open trip', (await api(env, 'PUT', '/active', { tripId: 'tripBBBBBB2' })).status === 200 && (await (await api(env, 'GET', '/active')).json()).tripId === 'tripBBBBBB2');
+  const toRome = await (await post('/trips/active/offers', { offers: scraped })).json();
+  ok('"active" now follows the open trip', toRome.tripId === 'tripBBBBBB2' && pendingOf(env, 'tripBBBBBB2').length === 2 && pendingOf(env, 'tripAAAAAA1').length === 3);
+  ok('Claude\'s list shows which trip is open', /tripBBBBBB2[^\n]*open in the planner now/.test(text(await callTool(env, 'list_trips', {}))));
+  ok('an explicit trip id works too', (await post('/trips/tripAAAAAA1/offers', { offers: [{ kind: 'flight', from: 'PAR', to: 'NYC', price: { low: 400, high: 400, currency: 'USD' } }] })).status === 200);
+
+  await api(env, 'DELETE', '/trips/tripBBBBBB2');
+  const stale = await (await post('/trips/active/offers', { offers: scraped })).json();
+  ok('an active pointer to a deleted trip falls back to the only trip left', stale.tripId === 'tripAAAAAA1');
+
+  ok('a capture with nothing usable is a 422', (await post('/trips/active/offers', { offers: [{ kind: 'flight' }] })).status === 422);
+  ok('a non-object body is a 400', (await post('/trips/active/offers', [1, 2])).status === 400);
+  ok('a malformed body is a 400', (await worker.fetch(new Request(`${BASE}/api/${TOKEN}/trips/active/offers`, { method: 'POST', body: '{nope' }), env)).status === 400);
+  ok('a capture into a trip that does not exist is a 404', (await post('/trips/nosuchtrip9/offers', { offers: scraped })).status === 404);
+  ok('"active" cannot be used as a trip id', (await api(env, 'PUT', '/trips/active', { title: 'x', snapshot: snapshotFrom([]) })).status === 400);
+  ok('a non-trip id is refused as the open trip', (await api(env, 'PUT', '/active', { tripId: '../x' })).status === 400);
+  const wrongToken = await worker.fetch(new Request(`${BASE}/api/wrong-token-0123456789abc/trips/active/offers`, { method: 'POST', body: JSON.stringify({ offers: scraped }) }), env);
+  ok('captures need the token like everything else', wrongToken.status === 404);
+  const huge = await worker.fetch(new Request(`${BASE}/api/${TOKEN}/trips/active/offers`, { method: 'POST', body: JSON.stringify({ notes: 'x'.repeat(300 * 1024) }) }), env);
+  ok('an oversized capture is a 413', huge.status === 413);
+}
+
 // ---- trip path and optimize ----
 {
   const env = makeEnv();

@@ -31,6 +31,21 @@ pick `manifest.json` (temporary add-ons are removed when Firefox restarts).
 
 The toolbar badge shows how many items are waiting across both queues.
 
+## Where captures go: TripAgent
+
+If you use the TripAgent server ([docs/CLAUDE-CONNECTOR.md](../docs/CLAUDE-CONNECTOR.md)),
+the extension posts every capture to it, into whichever trip is open in your
+planner. They wait in the planner's review list until you tap Add, on any device,
+whether or not a planner tab is open, and Claude can see them.
+
+Setup is automatic: connect the planner to TripAgent and it tells the extension
+the URL. Or paste it in the popup's **TripAgent** section. A URL you saved in the
+popup is never replaced by a page. For a custom domain (not `*.workers.dev`),
+Chrome asks you once to allow the extension to reach it.
+
+With no TripAgent URL, or if it can't be reached, captures are pushed into an
+open planner tab, exactly as before, and the popup says why.
+
 ## Selected prices
 
 1. Select the price/fare/rate text on any page

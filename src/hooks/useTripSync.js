@@ -15,8 +15,9 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import {
-  listRemoteTrips, getRemoteTrip, putRemoteTrip, deleteRemoteTrip,
+  listRemoteTrips, getRemoteTrip, putRemoteTrip, deleteRemoteTrip, setActiveRemoteTrip,
 } from '../utils/connectorSync.js';
+import { isExtensionEnvelope, postToExtension } from '../utils/tripAgentBridge.js';
 import {
   adoptRemoteTrip, replaceFromRemote, markSynced, isDirty, forgetDeleted, removeTrip,
 } from '../utils/tripStore.js';
@@ -110,6 +111,27 @@ export default function useTripSync(store, setStore) {
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [connectorUrl, syncNow]);
+
+  // Tell the server which trip is open, so captures from the browser extension
+  // land in it. The trip has to exist there first, so this waits for its push.
+  const activeId = store.activeId;
+  const activeSynced = (() => { const t = store.trips.find((x) => x.id === activeId); return !!t && t.syncedAt !== undefined; })();
+  useEffect(() => {
+    if (!connectorUrl || !activeSynced) return;
+    setActiveRemoteTrip(connectorUrl, activeId).catch(() => { /* best effort */ });
+  }, [connectorUrl, activeId, activeSynced]);
+
+  // Tell the browser extension (if installed) where TripAgent is, so it needs
+  // no setup of its own. It answers our READY with STATUS, which also covers
+  // the extension loading after this page.
+  useEffect(() => {
+    if (!connectorUrl) return undefined;
+    const announce = () => postToExtension('CONNECTOR', { url: connectorUrl });
+    announce();
+    const onMessage = (event) => { if (isExtensionEnvelope(event) && event.data.type === 'STATUS') announce(); };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [connectorUrl]);
 
   // A trip deleted here is removed on the server straight away.
   const pendingDeletes = store.deletedIds.length;

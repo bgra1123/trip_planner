@@ -171,11 +171,58 @@
     renderOffers();
   }
 
+  // ---- TripAgent ----------------------------------------------------------
+
+  function renderServer(url) {
+    $('server-on').hidden = !url;
+    $('server-off').hidden = !!url;
+    if (url) {
+      try { $('server-on-text').textContent = 'Connected to ' + new URL(url).host + '. Captures go to the trip open in your planner.'; } catch (err) { /* keep default text */ }
+    }
+  }
+
+  // What happened to a capture, in one sentence. TripAgent first; otherwise the
+  // old planner-tab path, where "delivered" counts open planner tabs.
+  function whereItWent(reply, count, noun) {
+    var server = reply.server;
+    if (server && server.ok) {
+      return 'Sent ' + count + ' ' + noun + (count === 1 ? '' : 's') + ' to \u201c' + (server.title || 'your trip') + '\u201d on TripAgent \u2014 review them in the planner.';
+    }
+    var why = server && !server.notConfigured ? server.error + ' ' : '';
+    if (reply.delivered) return why + 'Sent ' + count + ' ' + noun + (count === 1 ? '' : 's') + ' to ' + reply.delivered + ' planner tab' + (reply.delivered === 1 ? '' : 's') + '.';
+    return why + (server && server.notConfigured ? 'No planner tab is open \u2014 set up TripAgent above, or start the app.' : 'Nothing was delivered.');
+  }
+
+  $('server-save-btn').addEventListener('click', async function () {
+    var url = $('server-url').value.trim();
+    if (!url) { showStatus('Paste your TripAgent URL first.', true); return; }
+    var origin;
+    try { origin = new URL(url).origin + '/*'; } catch (err) { showStatus('That is not a URL.', true); return; }
+    // The manifest covers workers.dev; a custom domain needs the user's OK once.
+    if (origin.indexOf('https://') === 0) {
+      var has = await chrome.permissions.contains({ origins: [origin] });
+      if (!has) {
+        var granted = await chrome.permissions.request({ origins: [origin] });
+        if (!granted) { showStatus('The extension needs permission to reach that address.', true); return; }
+      }
+    }
+    var reply = await send({ type: 'SET_CONNECTOR', url: url });
+    if (!reply.ok) { showStatus(reply.error, true); return; }
+    showStatus('TripAgent connected.');
+    refresh();
+  });
+
+  $('server-change-btn').addEventListener('click', async function () {
+    await send({ type: 'SET_CONNECTOR', url: '' });
+    refresh();
+  });
+
   async function refresh() {
     var state = await send({ type: 'GET_STATE' });
     if (!state.ok) { showStatus(state.error, true); return; }
     captures = state.captures || [];
     offers = state.offers || [];
+    renderServer(state.connectorUrl || '');
     OVERRIDE_FIELDS.forEach(function (f) {
       $(f).value = (state.options && state.options[f]) || '';
     });
@@ -199,9 +246,7 @@
     if (!captures.length) { showStatus('Nothing to send yet.', true); return; }
     var reply = await send({ type: 'SEND_NOTES_TO_PLANNER', notes: notesText() });
     if (!reply.ok) { showStatus(reply.error, true); return; }
-    showStatus(reply.delivered
-      ? 'Sent ' + captures.length + ' line(s) to ' + reply.delivered + ' planner tab' + (reply.delivered === 1 ? '' : 's') + '.'
-      : 'No planner tab is open — copy as notes instead, or start the app.', !reply.delivered);
+    showStatus(whereItWent(reply, captures.length, 'line'), !((reply.server && reply.server.ok) || reply.delivered));
   });
 
   $('clear-btn').addEventListener('click', async function () {
@@ -215,9 +260,13 @@
     await send({ type: 'SET_OPTIONS', options: overrides() });
     var reply = await send({ type: 'CAPTURE_ACTIVE_TAB', overrides: overrides() });
     if (!reply.ok) { showStatus(reply.error, true); return; }
-    showStatus(reply.captured
-      ? 'Found ' + reply.captured + ', ' + reply.added + ' new.'
-      : 'Nothing recognizable here — scroll the results into view, or right-click a price instead.', !reply.added);
+    if (!reply.captured) {
+      showStatus('Nothing recognizable here \u2014 scroll the results into view, or right-click a price instead.', true);
+    } else if (reply.server && reply.server.ok) {
+      showStatus('Found ' + reply.captured + ' \u2014 sent to \u201c' + (reply.server.title || 'your trip') + '\u201d on TripAgent. Review them in the planner.');
+    } else {
+      showStatus('Found ' + reply.captured + ', ' + reply.added + ' new.' + (reply.server && !reply.server.notConfigured ? ' ' + reply.server.error : ''), !reply.added);
+    }
     refresh();
   });
 
@@ -225,9 +274,7 @@
     var reply = await send({ type: 'SEND_OFFERS_TO_PLANNER' });
     if (!reply.ok) { showStatus(reply.error, true); return; }
     if (!reply.count) { showStatus('Nothing scraped to send.', true); return; }
-    showStatus(reply.delivered
-      ? 'Sent ' + reply.count + ' offer(s) to ' + reply.delivered + ' planner tab' + (reply.delivered === 1 ? '' : 's') + '.'
-      : 'No planner tab is open — start the app and try again.', !reply.delivered);
+    showStatus(whereItWent(reply, reply.count, 'offer'), !((reply.server && reply.server.ok) || reply.delivered));
   });
 
   $('clear-offers-btn').addEventListener('click', async function () {

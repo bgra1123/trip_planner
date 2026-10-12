@@ -24,12 +24,17 @@
 //   DELETE /api/TOKEN/trips/ID             planner: delete a trip
 //   GET    /api/TOKEN/trips/ID/pending     planner: options waiting for review
 //   POST   /api/TOKEN/trips/ID/ack         planner: { ids } reviewed — forget them
+//   GET|PUT /api/TOKEN/active              the trip open in the planner: { tripId }
+//   POST   /api/TOKEN/trips/ID/offers      any capture tool (browser extension,
+//                                          bookmarklet): { offers?, notes?, source? }
+//                                          into that trip's review list. ID may
+//                                          be "active" — the trip open in the planner.
 //
 // Every option goes through the planner's own normalizeOffers(), and trip
 // paths and rankings are computed with the planner's own grouping and cost
 // code, so Claude is told exactly what the planner would show.
 
-import { normalizeOffers, mergeOffers, offerCostText } from '../../src/utils/tripAgentOffers.js';
+import { normalizeOffers, mergeOffers, offerCostText, offersFromNotesText } from '../../src/utils/tripAgentOffers.js';
 import {
   groupRows, deriveRouteChain, enumerateCombinations, pickedOption, costLabel, euro, sumRange,
 } from '../../src/utils/parseTripNotes.js';
@@ -166,6 +171,7 @@ const TOOLS = [
 
 const snapKey = (token, id) => `snap:${token}:${id}`;
 const pendKey = (token, id) => `pend:${token}:${id}`;
+const activeKey = (token) => `active:${token}`;
 
 function newTripId() {
   const bytes = new Uint8Array(9);
@@ -229,7 +235,15 @@ async function listTrips(env, token) {
   return trips.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
 
-const tripLine = (t) => `- ${t.id}: ${t.title || 'Untitled trip'}${t.route ? ` (${t.route})` : ''} — ${t.itemCount || 0} in plan, ${t.pendingCount || 0} waiting for review`;
+// The trip open in the planner — where a capture tool with no trip of its own
+// (the browser extension) sends things.
+async function getActiveId(env, token) {
+  const raw = await env.TRIPS.get(activeKey(token));
+  if (!raw) return null;
+  try { const { tripId } = JSON.parse(raw); return TRIP_ID_RE.test(String(tripId)) ? String(tripId) : null; } catch { return null; }
+}
+
+const tripLine = (t, activeId) => `- ${t.id}: ${t.title || 'Untitled trip'}${t.route ? ` (${t.route})` : ''} — ${t.itemCount || 0} in plan, ${t.pendingCount || 0} waiting for review${t.id === activeId ? ' [open in the planner now]' : ''}`;
 
 // ---- tools -----------------------------------------------------------------
 
@@ -250,7 +264,8 @@ async function resolveTrip(args, env, token) {
     return { error: textResult('The user has no trips yet. Ask whether to start one, then call create_trip — or have them open the planner once so their trip syncs here.', true) };
   }
   if (trips.length > 1) {
-    return { error: textResult(`The user has ${trips.length} trips — ask which one they mean, then pass its tripId:\n${trips.map(tripLine).join('\n')}`, true) };
+    const activeId = await getActiveId(env, token);
+    return { error: textResult(`The user has ${trips.length} trips — ask which one they mean, then pass its tripId:\n${trips.map((t) => tripLine(t, activeId)).join('\n')}`, true) };
   }
   return { trip: await getTrip(env, token, trips[0].id) };
 }
@@ -513,7 +528,8 @@ async function callTool(name, args, env, token) {
   switch (name) {
     case 'list_trips': {
       const trips = await listTrips(env, token);
-      return textResult(trips.length ? `${trips.length} trip${trips.length === 1 ? '' : 's'}, newest first:\n${trips.map(tripLine).join('\n')}` : 'No trips yet. Ask the user whether to start one (create_trip), or have them open the planner once so their trip syncs here.');
+      const activeId = await getActiveId(env, token);
+      return textResult(trips.length ? `${trips.length} trip${trips.length === 1 ? '' : 's'}, newest first:\n${trips.map((t) => tripLine(t, activeId)).join('\n')}` : 'No trips yet. Ask the user whether to start one (create_trip), or have them open the planner once so their trip syncs here.');
     }
     case 'create_trip': return createTrip(a, env, token);
     case 'add_trip_options': return addTripOptions(a, env, token);
@@ -609,10 +625,67 @@ function validSnapshot(s) {
     && (s.rateRows === undefined || Array.isArray(s.rateRows));
 }
 
+// Which trip is open in the planner, so a capture tool with no trip of its own
+// knows where to send things. The planner sets it when the user switches trips.
+async function handleActive(request, env, token, cors) {
+  if (request.method === 'GET') return json({ tripId: await getActiveId(env, token) }, 200, cors);
+  if (request.method === 'PUT') {
+    let tripId;
+    try { ({ tripId } = await request.json()); } catch { return json({ error: 'Body must be JSON: { "tripId" }' }, 400, cors); }
+    if (!TRIP_ID_RE.test(String(tripId))) return json({ error: 'Not a trip id.' }, 400, cors);
+    await env.TRIPS.put(activeKey(token), JSON.stringify({ tripId: String(tripId), updatedAt: Date.now() }));
+    return json({ ok: true }, 200, cors);
+  }
+  return json({ error: 'Not found' }, 404, cors);
+}
+
+// A capture tool posting offers (or trip-notes lines) into a trip's review
+// list. The same validation as Claude's add_trip_options: nothing is trusted
+// as sent, and nothing reaches the plan until the user taps Add.
+async function handleCapture(request, env, token, id, cors) {
+  let body;
+  try {
+    const text = await request.text();
+    if (text.length > MAX_BODY_BYTES) return json({ error: 'Too large.' }, 413, cors);
+    body = JSON.parse(text);
+  } catch {
+    return json({ error: 'Body must be JSON: { "offers": [...] } or { "notes": "..." }' }, 400, cors);
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'Body must be a JSON object.' }, 400, cors);
+
+  let trip;
+  if (id === 'active') {
+    const activeId = await getActiveId(env, token);
+    trip = activeId ? await getTrip(env, token, activeId) : null;
+    if (!trip) {
+      const trips = await listTrips(env, token);
+      if (trips.length === 1) trip = await getTrip(env, token, trips[0].id);
+    }
+    if (!trip) return json({ error: 'no_active_trip', message: 'Open a trip in the planner (with TripAgent connected) so captures know where to go.' }, 409, cors);
+  } else {
+    trip = await getTrip(env, token, id);
+    if (!trip) return json({ error: 'Not found' }, 404, cors);
+  }
+
+  const source = String(body.source || 'extension').slice(0, 60);
+  const defaults = { source, ...(body.window ? { window: String(body.window).slice(0, 40) } : {}) };
+  const incoming = [
+    ...normalizeOffers(Array.isArray(body.offers) ? body.offers.slice(0, 100) : [], defaults),
+    ...(typeof body.notes === 'string' && body.notes.trim() ? offersFromNotesText(body.notes.slice(0, 20000), defaults).offers : []),
+  ];
+  if (!incoming.length) return json({ error: 'no_usable_offers', message: 'Nothing in that capture had a route or place, or a price.' }, 422, cors);
+
+  const pending = await readPending(env, token, trip.id);
+  const merged = mergeOffers(pending, incoming, MAX_PENDING);
+  await writePending(env, token, trip.id, merged);
+  return json({ ok: true, tripId: trip.id, title: trip.title, recorded: incoming.length, waiting: merged.length }, 200, cors);
+}
+
 async function handleApi(request, env, token, parts) {
   const cors = corsHeaders(allowedOrigin(request, env));
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
-  // parts: ['api', token, 'trips', id?, sub?]
+  // parts: ['api', token, 'trips', id?, sub?] or ['api', token, 'active']
+  if (parts[2] === 'active' && parts.length === 3) return handleActive(request, env, token, cors);
   if (parts[2] !== 'trips') return json({ error: 'Not found' }, 404, cors);
   const id = parts[3];
   const sub = parts[4];
@@ -629,6 +702,7 @@ async function handleApi(request, env, token, parts) {
       return trip ? json(trip, 200, cors) : json({ error: 'Not found' }, 404, cors);
     }
     if (request.method === 'PUT') {
+      if (id === 'active') return json({ error: '"active" is reserved.' }, 400, cors);
       let body;
       try {
         const text = await request.text();
@@ -659,6 +733,7 @@ async function handleApi(request, env, token, parts) {
     return json({ error: 'Not found' }, 404, cors);
   }
 
+  if (sub === 'offers' && request.method === 'POST') return handleCapture(request, env, token, id, cors);
   if (sub === 'pending' && request.method === 'GET') {
     if (!(await getTrip(env, token, id))) return json({ error: 'Not found' }, 404, cors);
     return json({ offers: await readPending(env, token, id) }, 200, cors);

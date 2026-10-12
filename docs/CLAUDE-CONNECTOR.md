@@ -80,6 +80,16 @@ places above, and delete the old worker in the Cloudflare dashboard.
 4. Open the planner (or switch back to it) and open the trip. The options are in
    the review list; tap **Add** on the ones you want, or ✕ to drop them.
 
+**Capturing from Chrome.** The browser extension (`extension/`) sends what it
+captures straight to TripAgent, into the trip that is open in your planner, so
+the planner tab doesn't need to be open at the time and the options show up on
+your phone as well. There's nothing to configure: when the planner is connected
+and the extension is installed, the planner tells the extension where TripAgent
+is. (You can also paste the URL into the extension popup.) If TripAgent isn't
+set up or can't be reached, the extension falls back to pushing into an open
+planner tab, as before. Captures from Chrome and from Claude land in the same
+review list and de-duplicate against each other.
+
 **Several trips.** The bar at the top of the planner switches between trips and
 creates, renames and deletes them. Deleting a trip also deletes it from
 TripAgent, so Claude no longer sees it.

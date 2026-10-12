@@ -12,7 +12,7 @@
   'use strict';
 
   var $ = function (id) { return document.getElementById(id); };
-  var OVERRIDE_FIELDS = ['from', 'to', 'window', 'travelers'];
+  var OVERRIDE_FIELDS = ['from', 'to', 'window'];
 
   var captures = [];
   var offers = [];
@@ -42,8 +42,6 @@
       from: $('from').value.trim().toUpperCase(),
       to: $('to').value.trim().toUpperCase(),
       window: $('window').value.trim(),
-      travelers: $('travelers').value.trim(),
-      perTraveler: $('per-traveler').checked,
     };
   }
 
@@ -173,6 +171,64 @@
     renderOffers();
   }
 
+  // ---- Confirm prices ------------------------------------------------------
+  // Bank portals don't say whether a flight price is per traveler. We ask, and
+  // nothing from them is sent until the user answers.
+
+  var PORTAL_NAMES = { 'capital-one': 'Capital One Travel', 'amex': 'Amex Travel' };
+
+  function el(tag, props, children) {
+    var node = document.createElement(tag);
+    Object.keys(props || {}).forEach(function (k) { node[k] = props[k]; });
+    (children || []).forEach(function (c) { node.appendChild(typeof c === 'string' ? document.createTextNode(c) : c); });
+    return node;
+  }
+
+  function renderPricing(held, pricing) {
+    var list = $('pricing-list');
+    list.textContent = '';
+    held = held || [];
+    pricing = pricing || {};
+
+    held.forEach(function (h) {
+      var name = PORTAL_NAMES[h.source] || h.source;
+      var group = 'basis-' + h.source;
+      var perTraveler = el('input', { type: 'radio', name: group, value: 'per_traveler' });
+      var total = el('input', { type: 'radio', name: group, value: 'total' });
+      var count = el('input', { type: 'number', min: 1, max: 20, placeholder: '2' });
+      count.style.width = '3.5em';
+      var confirm = el('button', { className: 'btn -primary', textContent: 'Confirm and send' });
+      confirm.addEventListener('click', async function () {
+        var basis = perTraveler.checked ? 'per_traveler' : (total.checked ? 'total' : '');
+        if (!basis) { showStatus('Choose per traveler or total for everyone.', true); return; }
+        var reply = await send({ type: 'CONFIRM_PRICING', source: h.source, basis: basis, travelers: count.value });
+        if (!reply.ok) { showStatus(reply.error, true); return; }
+        showStatus(whereItWent(reply, reply.count, 'offer'), !((reply.server && reply.server.ok) || reply.delivered));
+        refresh();
+      });
+      list.appendChild(el('div', { className: 'section' }, [
+        el('p', {}, [el('strong', { textContent: name + ': ' }), h.count + ' flight' + (h.count === 1 ? ' is' : 's are') + ' waiting. Are these prices per traveler, or the total for everyone?']),
+        el('label', {}, [perTraveler, ' Per traveler \u2014 how many travelers? ', count]),
+        el('br'),
+        el('label', {}, [total, ' Total for everyone']),
+        el('p', { className: 'hint', textContent: 'Also check on the page whether the price covers the round trip or just this flight.' }),
+        el('div', { className: 'btn-row' }, [confirm]),
+      ]));
+    });
+
+    // What was already confirmed, so it is never a hidden setting.
+    Object.keys(pricing).forEach(function (source) {
+      var p = pricing[source];
+      var change = el('button', { className: 'btn -ghost', textContent: 'Change' });
+      change.addEventListener('click', async function () { await send({ type: 'CLEAR_PRICING', source: source }); refresh(); });
+      list.appendChild(el('div', { className: 'hint' }, [
+        (PORTAL_NAMES[source] || source) + ': ' + (p.basis === 'total' ? 'total for everyone' : 'per traveler \u00d7 ' + p.travelers) + ' (confirmed by you) ',
+        change,
+      ]));
+    });
+    $('pricing-section').hidden = !list.children.length;
+  }
+
   // ---- TripAgent ----------------------------------------------------------
 
   function renderServer(url) {
@@ -225,18 +281,16 @@
     captures = state.captures || [];
     offers = state.offers || [];
     renderServer(state.connectorUrl || '');
+    renderPricing(state.held, state.pricing);
     OVERRIDE_FIELDS.forEach(function (f) {
       $(f).value = (state.options && state.options[f]) || '';
     });
-    $('per-traveler').checked = !!(state.options && state.options.perTraveler);
     renderAll(state);
   }
 
   OVERRIDE_FIELDS.forEach(function (f) {
     $(f).addEventListener('change', function () { send({ type: 'SET_OPTIONS', options: overrides() }); });
   });
-
-  $('per-traveler').addEventListener('change', function () { send({ type: 'SET_OPTIONS', options: overrides() }); });
 
   $('copy-btn').addEventListener('click', function () {
     if (!captures.length) { showStatus('Nothing to copy yet.', true); return; }
@@ -265,7 +319,9 @@
     await send({ type: 'SET_OPTIONS', options: overrides() });
     var reply = await send({ type: 'CAPTURE_ACTIVE_TAB', overrides: overrides() });
     if (!reply.ok) { showStatus(reply.error, true); return; }
-    if (!reply.captured) {
+    if (reply.held && reply.held.length) {
+      showStatus('Found ' + reply.captured + '. Confirm below whether the prices are per traveler \u2014 they\u2019re held until you do.', true);
+    } else if (!reply.captured) {
       showStatus('Nothing recognizable here \u2014 scroll the results into view, or right-click a price instead.', true);
     } else if (reply.server && reply.server.ok) {
       showStatus('Found ' + reply.captured + ' \u2014 sent to \u201c' + (reply.server.title || 'your trip') + '\u201d on TripAgent. Review them in the planner.');
@@ -278,6 +334,7 @@
   $('send-offers-btn').addEventListener('click', async function () {
     var reply = await send({ type: 'SEND_OFFERS_TO_PLANNER' });
     if (!reply.ok) { showStatus(reply.error, true); return; }
+    if (reply.held && reply.held.length) { showStatus('Confirm below whether the prices are per traveler first.', true); refresh(); return; }
     if (!reply.count) { showStatus('Nothing scraped to send.', true); return; }
     showStatus(whereItWent(reply, reply.count, 'offer'), !((reply.server && reply.server.ok) || reply.delivered));
   });

@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { listenForExtension, requestCapturedOffers, clearExtensionOffers } from '../utils/tripAgentBridge.js';
-import { mergeOffers, offersToRows, offersFromNotesText, normalizeOffers } from '../utils/tripAgentOffers.js';
+import { mergeOffers, offersToRows, offersFromNotesText, normalizeOffers, totalForTravelers } from '../utils/tripAgentOffers.js';
 import { fetchPendingOffers, ackOffers } from '../utils/connectorSync.js';
 
 import { useConnector } from './useTripSync.js';
@@ -111,8 +111,11 @@ export default function useTripAgent() {
   // the model transcribed) go through the same parser and into the same
   // staging list, so they are reviewed before anything reaches the plan.
   // Returns how many offers were staged.
-  const stageNotes = useCallback((notesText, source) => {
-    const { offers: incoming, rates } = offersFromNotesText(notesText, { source: source || 'screenshot' });
+  const stageNotes = useCallback((notesText, source, travelers) => {
+    const parsed = offersFromNotesText(notesText, { source: source || 'screenshot' });
+    const { rates } = parsed;
+    // Only when the user said the prices are per traveler (see the panel).
+    const incoming = travelers ? totalForTravelers(parsed.offers, travelers) : parsed.offers;
     if (incoming.length) setOffers((prev) => mergeOffers(prev, incoming));
     if (rates && Object.keys(rates).length) setCapturedRates((prev) => ({ ...prev, ...rates }));
     return incoming.length;

@@ -48,7 +48,7 @@ const COMBO_CAP = 4000;
 const DEFAULT_ORIGINS = ['https://bgra1123.github.io', 'http://localhost:3000', 'http://127.0.0.1:3000'];
 const TRIP_ID_RE = /^[A-Za-z0-9_-]{6,40}$/;
 
-const INSTRUCTIONS = `This server holds the user's trips in their trip planner. Typical use: the user shares a screenshot, or pastes the text of a results page, from a booking site or credit-card travel portal (Capital One Travel, Amex Travel and the like), or dictates a flight or hotel; record every option with add_trip_options. Pasted page text is more reliable than a screenshot — read the numbers from it exactly, and ignore menus, filters and ads around the results. Capital One / Amex flight results are cards, and their layout differs between phone and desktop, so identify each part by what it is, not where it sits: a price like "$1,062"; departure time, duration and arrival time ("11:00 PM", "7h 10m", "11:10 AM"); the airline (sometimes printed twice); the fare name ("Delta Main Basic", "Bee Light", "Eco Basic" — put it in note, since basic fares have restrictions); stops ("Nonstop"); and the airports as "EWR - ORY". Ignore banners and badges ("Earn 5X miles on flights" is a perk, not a points price; "Best Price", "Fastest" are labels), filter chips and buttons. Record only results you can see in full, and say which were cut off. A leg is between cities, not airports, so set from/to to the city codes (EWR, JFK, LGA = NYC; CDG, ORY = PAR; LHR, LGW = LON; MXP, LIN = MIL) so every New York–Paris result is an alternative for the same leg, and put the exact airports ("EWR to ORY") in note. If the arrival clock is earlier than departure, it lands the next day (say so in note). Use the trip dates shown at the top of the page (e.g. "Oct 28 - Oct 31") as the window. Never assume what a portal's price covers. Before recording, confirm with the user: is the price per traveler or for everyone, how many are travelling, and does it cover the round trip or just that flight. Then record the total and say how you got it, with the shown figure in note (e.g. "$1,062 per traveler × 2"). Once the user has told you for a portal in this conversation, don't ask again. Card portals quote in the card's currency (usually USD) and often show a miles/points price beside the cash price: the cash price goes in price, the points go in note, never the other way round. Hotels from a card program (e.g. Amex Fine Hotels + Resorts) get the program name in note. Only record what is actually stated or shown — never estimate or invent a price, time, or airline. If a price is per person, multiply by the number of travelers before recording it (ask how many if it isn't clear), and say you did. If the user corrects something you recorded, use update_trip_option; to drop one, remove_trip_option (both need the option's id, shown by list_pending_options and add_trip_options). Options land in the planner's review list and the user taps Add there — tell them they are waiting for review, not added. Only call create_trip when the user asks for a new trip.
+const INSTRUCTIONS = `This server holds the user's trips in their trip planner. Typical use: the user shares a screenshot, or pastes the text of a results page, from a booking site or credit-card travel portal (Capital One Travel, Amex Travel and the like), or dictates a flight or hotel; record every option with add_trip_options. Pasted page text is more reliable than a screenshot — read the numbers from it exactly, and ignore menus, filters and ads around the results. Capital One / Amex flight results are cards, and their layout differs between phone and desktop, so identify each part by what it is, not where it sits: a price like "$1,062"; departure time, duration and arrival time ("11:00 PM", "7h 10m", "11:10 AM"); the airline (sometimes printed twice); the fare name ("Delta Main Basic", "Bee Light", "Eco Basic" — put it in note, since basic fares have restrictions); stops ("Nonstop"); and the airports as "EWR - ORY". Ignore banners and badges ("Earn 5X miles on flights" is a perk, not a points price; "Best Price", "Fastest" are labels), filter chips and buttons. Record only results you can see in full, and say which were cut off. A leg is between cities, not airports, so set from/to to the city codes (EWR, JFK, LGA = NYC; CDG, ORY = PAR; LHR, LGW = LON; MXP, LIN = MIL) so every New York–Paris result is an alternative for the same leg, and put the exact airports ("EWR to ORY") in note. If the arrival clock is earlier than departure, it lands the next day (say so in note). Use the trip dates shown at the top of the page (e.g. "Oct 28 - Oct 31") as the window. Never assume what a portal's price covers. Before recording, confirm with the user: is the price per traveler or for everyone, how many are travelling, and does it cover the round trip or just that flight. Then pass their answer as price_basis ("per_traveler" with travelers, or "total") and give prices exactly as shown — the server does the multiplying and notes it ("$1,062 per traveler × 2"), and add_trip_options refuses priced options without a price_basis. You cannot know this from the page, so you must ask; once the user has told you for a portal in this conversation, reuse their answer instead of asking again. Card portals quote in the card's currency (usually USD) and often show a miles/points price beside the cash price: the cash price goes in price, the points go in note, never the other way round. Hotels from a card program (e.g. Amex Fine Hotels + Resorts) get the program name in note. Only record what is actually stated or shown — never estimate or invent a price, time, or airline. If the user corrects something you recorded, use update_trip_option; to drop one, remove_trip_option (both need the option's id, shown by list_pending_options and add_trip_options). Options land in the planner's review list and the user taps Add there — tell them they are waiting for review, not added. Only call create_trip when the user asks for a new trip.
 
 To find public options, use whatever flight, hotel or train search tools the user has connected (other connectors in this chat), then record the results here with add_trip_options: one entry per result you want them to consider, copying each price, time and carrier exactly as the search returned it, with the search's name as source (e.g. "Expedia") and the date range as window. Use the currency the search quoted, and totals for everyone travelling. Search results are live quotes that can change, so say so and never present one as booked. Do not book anything. Do not record results you did not see.`;
 
@@ -94,7 +94,7 @@ const TOOLS = [
   {
     name: 'add_trip_options',
     title: 'Add trip options',
-    description: 'Record travel options the user found — read from a screenshot or pasted page text of search results, or dictated — into a trip for their review. Include every option, one entry each. Prices are totals for everyone travelling: if a displayed price is per person, multiply it by the number of travelers (ask if unknown) and mention that in note. If a price is only points or miles, leave price out and put the points in note. Do not invent or estimate anything that was not stated or shown.',
+    description: 'Record travel options the user found — read from a screenshot or pasted page text of search results, or dictated — into a trip for their review. Include every option, one entry each. Before recording any priced option, ask the user whether the prices shown are per traveler or the total for everyone, and how many are travelling (and whether they cover the round trip or one way); then pass price_basis (and travelers) from their answer. Pass prices exactly as shown on the page — with price_basis "per_traveler" the server multiplies them for you. If a price is only points or miles, leave price out and put the points in note. Do not invent or estimate anything that was not stated or shown.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -102,6 +102,8 @@ const TOOLS = [
         options: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'object', properties: OPTION_PROPERTIES, required: ['kind'], additionalProperties: false } },
         window: { type: 'string', description: 'Optional date-range label like "21-24 Oct". Options with the same label are only compared with each other.' },
         source: { type: 'string', description: 'Where the prices came from, e.g. "Capital One Travel", or "dictated".' },
+        price_basis: { type: 'string', enum: ['total', 'per_traveler'], description: 'REQUIRED whenever any option has a price, and only ever taken from the user\'s own answer — ask them, never guess. "per_traveler": every flight/train/activity price you pass is the per-person figure exactly as shown on the page, and the server multiplies it by travelers. "total": every price already covers everyone. Hotel prices are per room, never multiplied.' },
+        travelers: { type: 'integer', minimum: 1, maximum: 20, description: 'How many people are travelling. Required when price_basis is "per_traveler".' },
       },
       required: ['options'],
       additionalProperties: false,
@@ -316,13 +318,29 @@ function describeOffer(offer) {
 async function addTripOptions(args, env, token) {
   const options = Array.isArray(args.options) ? args.options : [];
   if (!options.length) return textResult('No options given — pass at least one entry in "options".', true);
+  const anyPrice = options.some((o) => o && o.price !== undefined && o.price !== null);
+  const basis = args.price_basis;
+  if (anyPrice && basis !== 'total' && basis !== 'per_traveler') {
+    return textResult('Ask the user before recording prices: are the prices shown per traveler or the total for everyone, how many people are travelling, and do they cover the round trip or one way? Then call again with price_basis ("per_traveler" or "total") and, for per_traveler, travelers. Do not guess.', true);
+  }
+  const travelers = Math.round(Number(args.travelers));
+  if (anyPrice && basis === 'per_traveler' && !(travelers >= 1 && travelers <= 20)) {
+    return textResult('price_basis "per_traveler" needs travelers: ask the user how many people are travelling, then call again.', true);
+  }
   const { trip, error } = await resolveTrip(args, env, token);
   if (error) return error;
 
   const accepted = [];
   const rejected = [];
   options.forEach((option, i) => {
-    const { raw, problems } = rawFromOption(option || {}, args.window);
+    let opt = option || {};
+    // Per-person prices are totalled here, not by the model: no arithmetic slips,
+    // and the figure as shown stays in the note. A room is not per traveler.
+    if (anyPrice && basis === 'per_traveler' && travelers >= 2 && opt.price !== undefined && opt.price !== null && opt.kind !== 'hotel') {
+      const each = opt.price;
+      opt = { ...opt, price: Math.round(each * travelers * 100) / 100, note: [opt.note, `${opt.currency || ''} ${each} per traveler × ${travelers}`.trim()].filter(Boolean).join(' · ') };
+    }
+    const { raw, problems } = rawFromOption(opt, args.window);
     if (problems.length) { rejected.push(`#${i + 1}: ${problems.join(', ')}`); return; }
     const [offer] = normalizeOffers([raw], { source: args.source ? `claude · ${args.source}` : 'claude' });
     if (!offer) { rejected.push(`#${i + 1}: needs a route or place, or a price`); return; }

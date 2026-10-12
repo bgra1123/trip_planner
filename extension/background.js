@@ -105,7 +105,7 @@ async function writeCaptures(captures) {
 
 async function readOptions() {
   const store = await chrome.storage.local.get(OPTIONS_KEY);
-  return store[OPTIONS_KEY] || { from: '', to: '', window: '', travelers: '', perTraveler: false };
+  return store[OPTIONS_KEY] || { from: '', to: '', window: '' };
 }
 
 // One badge for both queues — the user cares how much is waiting, not which
@@ -129,36 +129,66 @@ function offerKey(offer) {
   ].join('|');
 }
 
-// Bank portals read from the user's logged-in session. Whether a portal's
-// price is per traveler is the user's to say (the "Prices are per traveler"
-// box in the popup), not something to hard-code: portals differ and change.
+// ---- what a bank portal's price covers: the user says, we never guess ------
+// Capital One / Amex flight prices may be per traveler or for everyone, and the
+// page rarely says which. The planner adds prices up as shown, so a wrong
+// assumption either way is a silently wrong total. So bank-portal flights are
+// held back until the user answers in the popup, and only then sent.
 const BANK_SOURCES = ['capital-one', 'amex'];
+const PRICING_KEY = 'tripagent.pricing';
+
+async function readPricing() {
+  const store = await chrome.storage.local.get(PRICING_KEY);
+  return store[PRICING_KEY] && typeof store[PRICING_KEY] === 'object' ? store[PRICING_KEY] : {};
+}
+
+const needsBasis = (o) => !!o && o.kind === 'flight' && BANK_SOURCES.indexOf(o.source) !== -1 && !!o.price;
 
 // "$1,062" x 2 -> "$2,124". Anything that isn't a plain symbol-or-code + amount
-// is left untouched rather than guessed at.
+// can't be totalled, so it is held back rather than sent wrong.
 function scalePrice(price, n) {
   if (typeof price !== 'string') return null;
   const m = /^\s*([€$£₺]|[A-Z]{3}\s?)\s?(\d[\d,]*(?:\.\d+)?)\s*$/.exec(price);
   if (!m) return null;
   const amount = parseFloat(m[2].replace(/,/g, '')) * n;
-  const text = amount.toLocaleString('en-US', { maximumFractionDigits: 2 });
-  return { price: m[1] + text, each: m[1] + m[2] };
+  return { price: m[1] + amount.toLocaleString('en-US', { maximumFractionDigits: 2 }), each: m[1] + m[2] };
 }
 
-// When the user has said the portal's prices are per traveler and how many are
-// travelling, total bank-portal flight prices. Otherwise nothing changes: the
-// planner adds prices up as shown, so this is the user's call, never a guess.
-async function withTravelers(offers) {
-  const options = await readOptions();
-  const n = Math.round(Number(options.travelers));
-  if (!options.perTraveler || !(n >= 2)) return offers;
-  return offers.map((o) => {
-    if (!o || o.kind !== 'flight' || BANK_SOURCES.indexOf(o.source) === -1 || !o.price) return o;
-    const scaled = scalePrice(o.price, n);
-    const note = (extra) => ({ ...o, detail: [o.detail, extra].filter(Boolean).join(' · ') });
-    if (!scaled) return note('price is per traveler (could not total it)');
-    return { ...note(scaled.each + ' per traveler \u00d7 ' + n), price: scaled.price };
+// Split offers into those that can be sent now (everything that isn't a
+// bank-portal flight, and bank-portal flights whose basis the user confirmed,
+// totalled accordingly) and those still waiting for an answer.
+async function applyPricing(offers) {
+  const pricing = await readPricing();
+  const ready = [];
+  const held = [];
+  offers.forEach((o) => {
+    if (!needsBasis(o)) { ready.push(o); return; }
+    const p = pricing[o.source];
+    if (!p) { held.push(o); return; }
+    if (p.basis === 'total' || !(p.travelers >= 2)) { ready.push(o); return; }
+    const scaled = scalePrice(o.price, p.travelers);
+    if (!scaled) { held.push(o); return; }
+    ready.push({
+      ...o,
+      price: scaled.price,
+      detail: [o.detail, scaled.each + ' per traveler \u00d7 ' + p.travelers].filter(Boolean).join(' \u00b7 '),
+    });
   });
+  return { ready, held };
+}
+
+function heldSources(held) {
+  const counts = {};
+  held.forEach((o) => { counts[o.source] = (counts[o.source] || 0) + 1; });
+  return Object.keys(counts).map((source) => ({ source, count: counts[source] }));
+}
+
+// Deliver offers: TripAgent first; an open planner tab only if that fails.
+async function deliver(offers) {
+  if (!offers.length) return { server: { ok: false, notConfigured: true }, delivered: 0 };
+  const server = await sendToServer({ offers, source: 'extension' });
+  const delivered = server.ok ? 0 : await pushToPlanner({ type: 'PUSH_OFFERS', offers });
+  return { server, delivered };
 }
 
 async function addOffers(incoming) {
@@ -291,23 +321,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     switch (message.type) {
       case 'CAPTURED': {
-        const offers = await withTravelers(message.offers || []);
+        const offers = message.offers || [];
         const result = await addOffers(offers);
+        const { ready, held } = await applyPricing(offers);
         // Only when something new was found: automatic capture fires on every
         // page change, and the same results shouldn't be re-posted each time.
-        if (result.added) {
-          const server = await sendToServer({ offers, source: 'extension' });
-          if (!server.ok) await pushToPlanner({ type: 'PUSH_OFFERS', offers });
-        }
-        sendResponse({ ok: true, ...result });
+        if (result.added) await deliver(ready);
+        sendResponse({ ok: true, held: heldSources(held), ...result });
         break;
       }
       case 'PAGE_READY': {
-        sendResponse({ ok: true, version: version(), offers: await readOffers() });
+        sendResponse({ ok: true, version: version(), offers: (await applyPricing(await readOffers())).ready });
         break;
       }
       case 'PAGE_REQUEST_OFFERS': {
-        sendResponse({ ok: true, offers: await readOffers() });
+        sendResponse({ ok: true, offers: (await applyPricing(await readOffers())).ready });
         break;
       }
       case 'PAGE_CLEAR_OFFERS':
@@ -327,10 +355,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
       }
       case 'GET_STATE': {
-        const [offers, captures, options, tabs, connectorUrl] = await Promise.all([
-          readOffers(), readCaptures(), readOptions(), plannerTabs(), readConnector(),
+        const [offers, captures, options, tabs, connectorUrl, pricing] = await Promise.all([
+          readOffers(), readCaptures(), readOptions(), plannerTabs(), readConnector(), readPricing(),
         ]);
-        sendResponse({ ok: true, version: version(), offers, captures, options, plannerTabs: tabs.length, connectorUrl });
+        const { held } = await applyPricing(offers);
+        sendResponse({ ok: true, version: version(), offers, captures, options, plannerTabs: tabs.length, connectorUrl, pricing, held: heldSources(held) });
         break;
       }
       case 'SET_CONNECTOR': {
@@ -350,6 +379,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true });
         break;
       }
+      // The user's answer to "per traveler or total?" for one portal. Held
+      // offers from it are sent now; anything captured later is not asked again
+      // until they choose Change.
+      case 'CONFIRM_PRICING': {
+        const basis = message.basis;
+        const travelers = Math.round(Number(message.travelers));
+        if (BANK_SOURCES.indexOf(message.source) === -1) { sendResponse({ ok: false, error: 'Unknown portal.' }); break; }
+        if (basis !== 'total' && basis !== 'per_traveler') { sendResponse({ ok: false, error: 'Choose per traveler or total for everyone.' }); break; }
+        if (basis === 'per_traveler' && !(travelers >= 1 && travelers <= 20)) { sendResponse({ ok: false, error: 'Say how many people are travelling.' }); break; }
+        const pricing = await readPricing();
+        pricing[message.source] = basis === 'total' ? { basis } : { basis, travelers };
+        await chrome.storage.local.set({ [PRICING_KEY]: pricing });
+        const queued = (await readOffers()).filter((o) => o.source === message.source);
+        const { ready } = await applyPricing(queued);
+        const sent = await deliver(ready);
+        sendResponse({ ok: true, count: ready.length, server: sent.server, delivered: sent.delivered });
+        break;
+      }
+      case 'CLEAR_PRICING': {
+        const pricing = await readPricing();
+        delete pricing[message.source];
+        await chrome.storage.local.set({ [PRICING_KEY]: pricing });
+        sendResponse({ ok: true });
+        break;
+      }
       case 'SET_OPTIONS': {
         await chrome.storage.local.set({ [OPTIONS_KEY]: message.options || {} });
         sendResponse({ ok: true });
@@ -365,22 +419,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ ok: false, error: err.message });
           break;
         }
-        const offers = await withTravelers((reply && reply.offers) || []);
+        const offers = (reply && reply.offers) || [];
         const result = await addOffers(offers);
         // TripAgent first (dedupes server-side, so everything found is sent);
-        // an open planner tab only when that isn't available.
-        const server = offers.length ? await sendToServer({ offers, source: 'extension' }) : { ok: false, notConfigured: true };
-        if (result.added) {
-          if (!server.ok) await pushToPlanner({ type: 'PUSH_OFFERS', offers });
-        }
-        sendResponse({ ok: true, captured: offers.length, site: reply && reply.site, server, ...result });
+        // bank-portal flights wait until the user says what their prices cover.
+        const { ready, held } = await applyPricing(offers);
+        const sent = ready.length ? await deliver(ready) : { server: { ok: false, notConfigured: true }, delivered: 0 };
+        sendResponse({ ok: true, captured: offers.length, site: reply && reply.site, server: sent.server, held: heldSources(held), ...result });
         break;
       }
       case 'SEND_OFFERS_TO_PLANNER': {
-        const offers = await readOffers();
-        if (!offers.length) { sendResponse({ ok: true, delivered: 0, count: 0 }); break; }
-        const server = await sendToServer({ offers, source: 'extension' });
-        sendResponse({ ok: true, server, delivered: server.ok ? 0 : await pushToPlanner({ type: 'PUSH_OFFERS', offers }), count: offers.length });
+        const queued = await readOffers();
+        if (!queued.length) { sendResponse({ ok: true, delivered: 0, count: 0 }); break; }
+        const { ready, held } = await applyPricing(queued);
+        const sent = await deliver(ready);
+        sendResponse({ ok: true, server: sent.server, delivered: sent.delivered, count: ready.length, held: heldSources(held) });
         break;
       }
       // Selection captures reach the planner as trip-notes lines, which the

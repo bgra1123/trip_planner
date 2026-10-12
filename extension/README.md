@@ -46,14 +46,16 @@ Chrome asks you once to allow the extension to reach it.
 With no TripAgent URL, or if it can't be reached, captures are pushed into an
 open planner tab, exactly as before, and the popup says why.
 
-## Travelers
+## Confirm prices
 
-Whether a portal quotes prices per traveler is your call, not the extension's.
-If yours does, tick **Prices are per
-traveler** and set **Travelers** in the popup: Capital One and Amex flight
-prices are then multiplied, with "$1,062 per traveler × 2" noted in the option's
-detail. With the box unticked, prices are kept exactly as shown. Other sites and
-hotels are never multiplied.
+Capital One and Amex don't say whether a flight price is per traveler or for
+everyone, and the planner adds prices up as shown, so a wrong guess either way
+is a silently wrong total. The extension never guesses: it holds those flights
+until you answer in the popup's **Confirm prices** section (per traveler, and how
+many, or total for everyone), then sends them, totalled, with
+"$1,062 per traveler × 2" in the option's detail. Your answer is shown back with
+a **Change** button, and later captures from that portal aren't asked again until
+you change it. Other sites, hotels and hand-captured text aren't affected.
 
 ## Selected prices
 

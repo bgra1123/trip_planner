@@ -13,7 +13,7 @@
 import {
   normalizeTime, normalizePrice, normalizeOffer, normalizeOffers,
   offerToRow, offersToRows, offerCostText, rowCostIsParseable, mergeOffers,
-  offersFromNotesText, currenciesNeedingRate, offerFromLink, rowFromQuickEntry, safeHttpUrl, capturedAgo,
+  offersFromNotesText, currenciesNeedingRate, offerFromLink, rowFromQuickEntry, safeHttpUrl, capturedAgo, totalForTravelers,
 } from '../src/utils/tripAgentOffers.js';
 import { groupRows, parseNotes, defaultSelection, buildExportData, parseCost, convertToBase } from '../src/utils/parseTripNotes.js';
 import {
@@ -742,6 +742,25 @@ for (const blocked of ['chrome://settings', 'about:blank', 'devtools://devtools/
   check('a one-airport city keeps its own code', scrapers.metroOf('MUC'), 'MUC');
 
   check('space-separated text reads the same', gotGlued.map((o) => [o.from, o.to, o.carrier, o.price]), got.map((o) => [o.from, o.to, o.carrier, o.price]));
+}
+
+// ---- per-traveler totals (only ever applied after the user has said so) -----
+{
+  const offers = normalizeOffers([
+    { kind: 'flight', from: 'NYC', to: 'PAR', price: { low: 1062, high: 1062, currency: 'USD' }, detail: 'fare: Light' },
+    { kind: 'train', from: 'PAR', to: 'LYS', price: { low: 40, high: 60, currency: 'EUR' } },
+    { kind: 'hotel', place: 'Paris', label: 'H', price: { low: 280, high: 280, currency: 'USD' } },
+    { kind: 'flight', from: 'PAR', to: 'NYC', note: 'points only' },
+  ], {});
+  const two = totalForTravelers(offers, 2);
+  check('a flight price is doubled for two', two[0].price.low, 2124);
+  ok('…and the figure as shown is kept in the detail', /USD 1062 per traveler × 2/.test(two[0].detail) && /fare: Light/.test(two[0].detail), two[0].detail);
+  check('a price range is doubled at both ends', [two[1].price.low, two[1].price.high], [80, 120]);
+  check('a hotel is not doubled', two[2].price.low, 280);
+  check('an option with no price is untouched', two[3].price, null);
+  check('one traveler changes nothing', totalForTravelers(offers, 1), offers);
+  check('no count changes nothing', totalForTravelers(offers, ''), offers);
+  check('the original offers are not mutated', offers[0].price.low, 1062);
 }
 
 // ---- source links and price age ------------------------------------------

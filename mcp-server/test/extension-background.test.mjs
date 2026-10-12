@@ -156,53 +156,68 @@ try {
     await api('/active', { method: 'PUT', body: JSON.stringify({ tripId: 'tripOPEN001' }) });
   }
 
-  // -- per-traveler totals: only when the user says so --
+  // -- bank-portal prices are held until the user says what they cover --
   {
-    const { chrome, send } = loadBackground();
+    const { chrome, send, pushed } = loadBackground();
     await send({ type: 'SET_CONNECTOR', url: CONNECTOR_URL });
     await api('/trips/tripTRAV001', { method: 'PUT', body: JSON.stringify({ title: 'Travelers', snapshot: { rows: [], notes: [], rateRows: [] } }) });
     await api('/active', { method: 'PUT', body: JSON.stringify({ tripId: 'tripTRAV001' }) });
-    const flight = (price, source = 'capital-one') => ({ kind: 'flight', from: 'NYC', to: 'PAR', departure: '6:05 PM', arrival: '6:10 AM', carrier: 'Delta', price, source, detail: 'fare: Delta Main Basic' });
+    const flight = (price, source = 'capital-one', dep = '6:05 PM') => ({ kind: 'flight', from: 'NYC', to: 'PAR', departure: dep, arrival: '6:10 AM', carrier: 'Delta', price, source, detail: 'fare: Delta Main Basic' });
     const waiting = async () => (await api('/trips/tripTRAV001/pending')).offers;
-    const setOpts = (travelers, perTraveler) => send({ type: 'SET_OPTIONS', options: { from: '', to: '', window: '', travelers, perTraveler } });
 
-    // Nothing is assumed: with no setting the price is exactly as shown.
-    await send({ type: 'CAPTURED', offers: [flight('$1,062')], site: 'capital-one' });
-    let got = await waiting();
-    record('with no setting a portal price is kept exactly as shown', got.length === 1 && got[0].price.low === 1062 && !/per traveler/.test(got[0].detail), JSON.stringify(got));
+    // 1. Nothing is assumed: no answer yet, nothing leaves the extension.
+    const first = await send({ type: 'CAPTURED', offers: [flight('$1,062'), flight('$809', 'capital-one', '11:00 PM')], site: 'capital-one' });
+    record('a Capital One capture is held, and the popup is told to ask', first.ok && first.held.length === 1 && first.held[0].source === 'capital-one' && first.held[0].count === 2, JSON.stringify(first.held));
+    record('…nothing reached TripAgent', (await waiting()).length === 0);
+    record('…nor the planner tab', pushed.length === 0);
+    const state = await send({ type: 'GET_STATE' });
+    record('the popup state lists what is waiting for an answer', state.held.length === 1 && state.held[0].count === 2 && Object.keys(state.pricing).length === 0);
+    const asked = await send({ type: 'PAGE_READY' });
+    record('an opening planner tab is not handed unconfirmed prices either', asked.offers.length === 0);
+    const resend = await send({ type: 'SEND_OFFERS_TO_PLANNER' });
+    record('"Send to planner" holds them too and says so', resend.count === 0 && resend.held.length === 1 && (await waiting()).length === 0 && pushed.length === 0);
 
-    await setOpts('2', false);
-    await send({ type: 'CAPTURED', offers: [flight('$555')], site: 'capital-one' });
-    got = await waiting();
-    record('Travelers alone does not multiply (the user has not said it is per traveler)', got.some((o) => o.price.low === 555));
-
-    await setOpts('2', true);
-    await send({ type: 'CAPTURED', offers: [flight('$1,062.50'), flight('$809')], site: 'capital-one' });
-    got = await waiting();
-    const two = got.find((o) => o.price.low === 2125);
-    record('ticking per traveler with 2 travelers doubles a bank-portal flight price', !!two && two.price.currency === 'USD', JSON.stringify(got.map((o) => o.price)));
-    record('…keeping the dollar sign and cents', got.some((o) => o.price.low === 1618));
-    record('…and saying how it was totalled', !!two && /\$1,062\.50 per traveler × 2/.test(two.detail) && /fare: Delta Main Basic/.test(two.detail), two && two.detail);
-
-    await send({ type: 'CAPTURED', offers: [flight('$410', 'amex')], site: 'amex' });
-    got = await waiting();
-    record('Amex is a bank portal too, so the same setting applies', got.some((o) => o.price.low === 820));
-
+    // 2. Everything else is not affected.
     await send({ type: 'CAPTURED', offers: [flight('$500', 'kayak')], site: 'kayak' });
-    got = await waiting();
-    record('another site\'s price is never multiplied', got.some((o) => o.price.low === 500));
-
     await send({ type: 'CAPTURED', offers: [{ kind: 'hotel', place: 'Paris', label: 'H', price: '$300', source: 'capital-one' }], site: 'capital-one' });
-    got = await waiting();
-    record('a hotel is not multiplied (a room is not per traveler)', got.some((o) => o.category === 'stay' && o.price.low === 300));
+    let got = await waiting();
+    record('other sites and bank-portal hotels are sent without a question', got.some((o) => o.price.low === 500) && got.some((o) => o.category === 'stay' && o.price.low === 300) && got.length === 2);
 
-    await setOpts('1', true);
-    await send({ type: 'CAPTURED', offers: [flight('$777')], site: 'capital-one' });
-    got = await waiting();
-    record('one traveler leaves the price as shown', got.some((o) => o.price.low === 777 && !/per traveler/.test(o.detail)));
+    // 3. Bad answers are refused.
+    record('an unknown portal is refused', (await send({ type: 'CONFIRM_PRICING', source: 'evil', basis: 'total' })).ok === false);
+    record('no choice is refused', (await send({ type: 'CONFIRM_PRICING', source: 'capital-one', basis: '' })).ok === false);
+    record('per traveler without a count is refused', (await send({ type: 'CONFIRM_PRICING', source: 'capital-one', basis: 'per_traveler' })).ok === false);
+    record('…and none of that sent anything', (await waiting()).length === 2);
 
-    await setOpts('3', true);
-    await send({ type: 'CAPTURED', offers: [flight('Price on request')], site: 'capital-one' });
+    // 4. The user answers: per traveler, 2 people.
+    const ok2 = await send({ type: 'CONFIRM_PRICING', source: 'capital-one', basis: 'per_traveler', travelers: 2 });
+    got = await waiting();
+    const doubled = got.find((o) => o.price.low === 2124);
+    record('confirming sends the held flights, totalled', ok2.ok && ok2.count >= 2 && !!doubled && got.some((o) => o.price.low === 1618), JSON.stringify(got.map((o) => o.price)));
+    record('…noting how each was totalled', !!doubled && /\$1,062 per traveler × 2/.test(doubled.detail) && /fare: Delta Main Basic/.test(doubled.detail), doubled && doubled.detail);
+    record('the answer is shown back to the user, not hidden', (await send({ type: 'GET_STATE' })).pricing['capital-one'].travelers === 2 && (await send({ type: 'GET_STATE' })).held.length === 0);
+
+    // 5. Later captures are not asked again.
+    const later = await send({ type: 'CAPTURED', offers: [flight('$410', 'capital-one', '9:00 AM')], site: 'capital-one' });
+    record('a later capture is totalled without asking again', later.held.length === 0 && (await waiting()).some((o) => o.price.low === 820));
+
+    // 6. Amex is its own question.
+    const amex = await send({ type: 'CAPTURED', offers: [flight('$350', 'amex')], site: 'amex' });
+    record('Amex is asked separately', amex.held.length === 1 && amex.held[0].source === 'amex' && !(await waiting()).some((o) => o.price.low === 350 || o.price.low === 700));
+    await send({ type: 'CONFIRM_PRICING', source: 'amex', basis: 'total' });
+    record('"total for everyone" sends the price exactly as shown', (await waiting()).some((o) => o.price.low === 350 && !/per traveler/.test(o.detail)));
+
+    // 7. Change: the next capture asks again.
+    await send({ type: 'CLEAR_PRICING', source: 'capital-one' });
+    const again = await send({ type: 'CAPTURED', offers: [flight('$999', 'capital-one', '1:00 PM')], site: 'capital-one' });
+    record('after Change the next capture is held again', again.held.length === 1 && !(await waiting()).some((o) => o.price.low === 999 || o.price.low === 1998));
+    await send({ type: 'CONFIRM_PRICING', source: 'capital-one', basis: 'per_traveler', travelers: 1 });
+    record('one traveler leaves the price as shown', (await waiting()).some((o) => o.price.low === 999 && !/per traveler/.test(o.detail)));
+
+    // 8. A price that cannot be totalled is never sent wrong.
+    await send({ type: 'CONFIRM_PRICING', source: 'capital-one', basis: 'per_traveler', travelers: 3 });
+    const odd = await send({ type: 'CAPTURED', offers: [flight('Price on request', 'capital-one', '3:00 PM')], site: 'capital-one' });
+    record('a price that cannot be totalled stays held', odd.held.length === 1);
     void chrome;
     await api('/trips/tripTRAV001', { method: 'DELETE' });
     await api('/trips/tripOPEN001', { method: 'PUT', body: JSON.stringify({ title: 'Paris', snapshot: { rows: [], notes: [], rateRows: [] } }) });

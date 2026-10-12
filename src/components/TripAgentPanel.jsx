@@ -87,6 +87,12 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
   const [shotFiles, setShotFiles] = useState([]);
   const [shotWindow, setShotWindow] = useState(defaultWindow);
   const [shot, setShot] = useState({ busy: false, error: null, message: null });
+  // What the screenshot's prices cover. Deliberately starts unanswered: the
+  // picture rarely says, a wrong default would silently skew every total, so
+  // the button stays disabled until the user chooses.
+  const [shotBasis, setShotBasis] = useState('');
+  const [shotTravelers, setShotTravelers] = useState('');
+  const basisAnswered = shotBasis === 'total' || (shotBasis === 'per_traveler' && Number(shotTravelers) >= 1);
   const fileInputRef = React.useRef(null);
   const activeKey = savedKey || keyDraft.trim();
 
@@ -103,12 +109,12 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
   }
   async function handleReadScreenshots(e) {
     e.preventDefault();
-    if (!shotFiles.length || !activeKey) return;
+    if (!shotFiles.length || !activeKey || !basisAnswered) return;
     setShot({ busy: true, error: null, message: null });
     try {
       const images = await Promise.all(shotFiles.map((f) => imageFileToUpload(f)));
       const { notes, truncated } = await extractNotesFromImages(images, { apiKey: activeKey, browser: true });
-      const count = stageNotes(withWindow(notes, shotWindow), 'screenshot');
+      const count = stageNotes(withWindow(notes, shotWindow), 'screenshot', shotBasis === 'per_traveler' ? shotTravelers : '');
       setShot({
         busy: false,
         error: null,
@@ -353,6 +359,34 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
                   className="w-24 font-mono text-xs px-2 py-1.5 rounded border border-slate-300 focus:border-blue-400 focus:outline-none normal-case"
                 />
               </label>
+              <label className="text-[0.65rem] uppercase tracking-wide text-slate-500">
+                <span className="block mb-1">Prices shown are</span>
+                <select
+                  value={shotBasis}
+                  onChange={(e) => setShotBasis(e.target.value)}
+                  aria-label="What the prices in the screenshot cover"
+                  className="text-xs normal-case px-2 py-1.5 rounded border border-slate-300 bg-white focus:border-blue-400 focus:outline-none"
+                >
+                  <option value="">Choose…</option>
+                  <option value="per_traveler">Per traveler</option>
+                  <option value="total">Total for everyone</option>
+                </select>
+              </label>
+              {shotBasis === 'per_traveler' && (
+                <label className="text-[0.65rem] uppercase tracking-wide text-slate-500">
+                  <span className="block mb-1">Travelers</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="20"
+                    value={shotTravelers}
+                    onChange={(e) => setShotTravelers(e.target.value)}
+                    placeholder="2"
+                    aria-label="How many travelers"
+                    className="w-16 font-mono text-xs px-2 py-1.5 rounded border border-slate-300 focus:border-blue-400 focus:outline-none normal-case"
+                  />
+                </label>
+              )}
               {!savedKey && (
                 <label className="text-[0.65rem] uppercase tracking-wide text-slate-500">
                   <span className="block mb-1">Anthropic API key</span>
@@ -378,7 +412,7 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
               )}
               <button
                 type="submit"
-                disabled={shot.busy || !shotFiles.length || !activeKey}
+                disabled={shot.busy || !shotFiles.length || !activeKey || !basisAnswered}
                 className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:bg-slate-300"
               >
                 {shot.busy ? `Reading ${shotFiles.length > 1 ? `${shotFiles.length} screenshots` : 'screenshot'}…` : 'Read screenshot'}
@@ -389,6 +423,9 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
                 API key saved in this browser only.{' '}
                 <button type="button" onClick={forgetKey} className="text-blue-600 underline">Forget it</button>
               </p>
+            )}
+            {!basisAnswered && shotFiles.length > 0 && (
+              <p className="text-xs text-amber-700 mt-2">Say whether the prices are per traveler or the total for everyone (the screenshot rarely tells), then read it.</p>
             )}
             {shot.error && <p className="text-xs text-red-600 mt-2">{shot.error}</p>}
             {shot.message && <p className="text-xs text-green-700 mt-2">{shot.message}</p>}
@@ -500,7 +537,10 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
                               </>
                             ) : (o.group || '—')}
                           </td>
-                          <td className="px-2 py-1.5 text-slate-900">{row.option}</td>
+                          <td className="px-2 py-1.5 text-slate-900">
+                            {row.option}
+                            {o.detail && <div className="text-[0.65rem] text-slate-500 normal-case">{o.detail}</div>}
+                          </td>
                           <td className="px-2 py-1.5 font-mono text-slate-700">{row.timeText || '—'}</td>
                           <td className={`px-2 py-1.5 font-mono ${rowCostIsParseable(row) ? 'text-slate-900' : 'text-amber-700'}`}>{priceLabel(o)}</td>
                           <td className="px-2 py-1.5 text-slate-500">

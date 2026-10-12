@@ -143,13 +143,22 @@ record('a captured lira fare keeps its currency', /\u20ba38000|₺38000/.test(no
   // A real (1x1) PNG, so the browser's own image decode + canvas re-encode runs.
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
   await shotPage.locator('input[type="file"]').setInputFiles({ name: 'portal.png', mimeType: 'image/png', buffer: png });
-  await shotPage.getByRole('button', { name: 'Read screenshot' }).click();
+  // It does not guess what the prices cover: the button stays off until asked.
+  const readBtn = shotPage.getByRole('button', { name: 'Read screenshot' });
+  record('reading is disabled until the user says what the prices cover', await readBtn.isDisabled());
+  await shotPage.getByLabel('What the prices in the screenshot cover').selectOption('per_traveler');
+  record('per traveler also needs a traveler count', await readBtn.isDisabled());
+  await shotPage.getByLabel('How many travelers').fill('2');
+  record('answered: reading is enabled', await readBtn.isEnabled());
+  await readBtn.click();
   await shotPage.getByText(/Found \d+ option/).waitFor({ timeout: 15_000 }).catch(() => {});
 
   const shotBody = await shotPage.locator('body').innerText();
   record('a screenshot is read and its options are staged for review', /Found 2 options/.test(shotBody),
     shotBody.match(/(Found .*|The API.*|Could not.*|API error.*)/)?.[0] || '(no status message)');
-  record('the screenshot\'s flight reaches staging with its own currency', /NYC → PAR/.test(shotBody) && /\$612/.test(shotBody));
+  record('the screenshot\'s flight reaches staging with its own currency', /NYC → PAR/.test(shotBody) && /\$1,?224|\$1224/.test(shotBody), (shotBody.match(/\$\d[\d,]*/g) || []).join(' '));
+  record('per traveler x 2 doubled the flight and said so', /USD612 per traveler|USD 612 per traveler|\$612 per traveler/.test(shotBody) || /612 per traveler × 2/.test(shotBody), (shotBody.match(/[^\n]*per traveler[^\n]*/) || [''])[0]);
+  record('the hotel (a room) was not doubled', /\$280|USD280/.test(shotBody));
   record('the request carries the user\'s own key, sent only to the API', apiRequest && apiRequest.headers['x-api-key'] === 'sk-ant-test-key');
   record('the request asks for the cheapest model, with no effort setting (Haiku rejects it)',
     apiRequest && apiRequest.body.model === 'claude-haiku-4-5' && !apiRequest.body.output_config);

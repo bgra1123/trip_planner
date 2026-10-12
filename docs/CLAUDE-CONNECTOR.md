@@ -115,13 +115,18 @@ New York → Paris leg, with the exact airports in the option's note. (The
 Chrome extension does the same.) The same goes for the phone layout and the
 desktop layout, which order a result's parts differently.
 
-Whether a portal's price is **per traveler** or for everyone isn't something
-Claude assumes: it asks you (per traveler or total, how many are travelling,
-round trip or one way), records the total, and notes how it got there
-("$1,062 per traveler × 2"). It won't ask twice in the same conversation. In the
-Chrome extension, tick **Prices are per traveler** and set **Travelers** in the
-popup, and Capital One and Amex flight prices are multiplied for you; with the
-box unticked prices are kept exactly as shown.
+**Nothing guesses what a price covers.** A portal's flight price may be per
+traveler or for everyone, and the page rarely says. Every route asks you:
+- **Claude** asks (per traveler or total, how many people, round trip or one
+  way) before it records a priced option. The server refuses priced options
+  without your answer (`price_basis`), and does the multiplying itself, noting
+  "$1,062 per traveler × 2". It reuses your answer for the rest of that
+  conversation.
+- **The Chrome extension** holds Capital One and Amex flights until you answer
+  in the popup ("Confirm prices"), then sends them, totalled. It shows your
+  answer back with a **Change** button, so it's never a hidden setting.
+- **Read screenshot** in the planner won't run until you pick *Per traveler*
+  (with a count) or *Total for everyone*.
 
 Claude records the cash price in the card's currency (usually USD), puts any
 miles/points price in the note, never counts points as cash, and notes the

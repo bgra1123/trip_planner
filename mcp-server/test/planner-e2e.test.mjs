@@ -64,7 +64,7 @@ try {
   // Claude starts a trip before the planner has ever connected.
   const made = await say('create_trip', { title: 'Rome in May' });
   const romeId = (made.match(/trip (t[\w-]+)/) || [])[1];
-  await say('add_trip_options', { tripId: romeId, source: 'Capital One Travel', options: [
+  await say('add_trip_options', { price_basis: 'total', tripId: romeId, source: 'Capital One Travel', options: [
     { kind: 'flight', from: 'NYC', to: 'ROM', departure: '18:30', arrival: '07:45', carrier: 'ITA', price: 612, currency: 'USD', url: 'https://portal.example.com/results/ita-612' },
     { kind: 'flight', from: 'NYC', to: 'ROM', departure: '22:10', arrival: '11:30', carrier: 'Delta', price: 548, currency: 'USD' },
     { kind: 'hotel', place: 'Rome', name: 'Hotel Tiber', price: 280, currency: 'USD', per_night: true, nights: 3 },

@@ -155,6 +155,26 @@ function hash(text) {
   return h.toString(36);
 }
 
+// A portal's price may be per traveler; the planner adds prices up as they
+// are, so a party of two needs it doubled. The caller must have asked the user
+// (this never decides that itself). Only travel is scaled: a room is not per
+// traveler. Fewer than two travelers changes nothing.
+export function totalForTravelers(offers, travelers) {
+  const n = Math.round(Number(travelers));
+  if (!(n >= 2)) return offers;
+  const round2 = (x) => Math.round(x * 100) / 100;
+  return offers.map((o) => {
+    if (o.category !== 'travel' || !o.price) return o;
+    const { low, high, currency } = o.price;
+    const shown = low === high ? `${currency} ${low}` : `${currency} ${low}-${high}`;
+    return {
+      ...o,
+      price: { ...o.price, low: round2(low * n), high: round2(high * n) },
+      detail: [o.detail, `${shown} per traveler × ${n}`].filter(Boolean).join(' · '),
+    };
+  });
+}
+
 // A link back to the page an offer came from. Only web links are kept: an
 // offer can arrive from outside the page (a server, a capture tool), and this
 // URL ends up in an <a href>, where "javascript:" would run code.

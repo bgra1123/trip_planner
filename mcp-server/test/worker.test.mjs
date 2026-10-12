@@ -107,7 +107,7 @@ const PLAN = [
 {
   const env = makeEnv();
   ok('with no trips, list_trips says so', /No trips yet/.test(text(await callTool(env, 'list_trips', {}))));
-  const noTrip = await callTool(env, 'add_trip_options', { options: [{ kind: 'flight', from: 'NYC', to: 'PAR', price: 1, currency: 'USD' }] });
+  const noTrip = await callTool(env, 'add_trip_options', { price_basis: 'total', options: [{ kind: 'flight', from: 'NYC', to: 'PAR', price: 1, currency: 'USD' }] });
   ok('recording with no trip is an error that points to create_trip', noTrip.body.result.isError && /create_trip/.test(text(noTrip)), text(noTrip));
 
   const created = text(await callTool(env, 'create_trip', { title: 'Paris in October' }));
@@ -116,15 +116,15 @@ const PLAN = [
   ok('list_trips shows the new trip', new RegExp(id1).test(text(await callTool(env, 'list_trips', {}))));
 
   // With exactly one trip, tripId is optional.
-  const auto = await callTool(env, 'add_trip_options', { options: [{ kind: 'flight', from: 'NYC', to: 'PAR', price: 612, currency: 'USD' }] });
+  const auto = await callTool(env, 'add_trip_options', { price_basis: 'total', options: [{ kind: 'flight', from: 'NYC', to: 'PAR', price: 612, currency: 'USD' }] });
   ok('one trip is used automatically', /Recorded 1 option/.test(text(auto)) && pendingOf(env, id1).length === 1, text(auto));
 
   const id2 = (text(await callTool(env, 'create_trip', { title: 'Rome' })).match(/trip (t[\w-]+)/) || [])[1];
   ok('a second trip gets a different id', id2 && id2 !== id1);
-  const ambiguous = await callTool(env, 'add_trip_options', { options: [{ kind: 'flight', from: 'NYC', to: 'ROM', price: 1, currency: 'USD' }] });
+  const ambiguous = await callTool(env, 'add_trip_options', { price_basis: 'total', options: [{ kind: 'flight', from: 'NYC', to: 'ROM', price: 1, currency: 'USD' }] });
   ok('several trips and no tripId makes Claude ask', ambiguous.body.result.isError && /ask which one/.test(text(ambiguous)) && text(ambiguous).includes(id1) && text(ambiguous).includes(id2), text(ambiguous));
   ok('nothing was recorded on the ambiguous call', pendingOf(env, id1).length === 1 && pendingOf(env, id2).length === 0);
-  const explicit = await callTool(env, 'add_trip_options', { tripId: id2, options: [{ kind: 'flight', from: 'NYC', to: 'ROM', price: 1, currency: 'USD' }] });
+  const explicit = await callTool(env, 'add_trip_options', { price_basis: 'total', tripId: id2, options: [{ kind: 'flight', from: 'NYC', to: 'ROM', price: 1, currency: 'USD' }] });
   ok('an explicit tripId targets that trip', pendingOf(env, id2).length === 1, text(explicit));
   const missing = await callTool(env, 'list_pending_options', { tripId: 'doesnotexist1' });
   ok('an unknown trip id is an error', missing.body.result.isError && /No trip with id/.test(text(missing)));
@@ -132,11 +132,48 @@ const PLAN = [
   ok('a malformed trip id is refused', junk.body.result.isError);
 }
 
+// ---- prices are only recorded once the user has said what they cover ----
+{
+  const env = makeEnv();
+  const id = (text(await callTool(env, 'create_trip', { title: 'T' })).match(/trip (t[\w-]+)/) || [])[1];
+  const leg = { kind: 'flight', from: 'NYC', to: 'PAR', departure: '18:30', arrival: '07:45', carrier: 'Delta', price: 1062, currency: 'USD', note: 'fare: Delta Main Basic' };
+
+  const guessed = await callTool(env, 'add_trip_options', { options: [leg] });
+  ok('a priced option with no price_basis is refused, telling Claude to ask', guessed.body.result.isError && /Ask the user/.test(text(guessed)) && /per traveler or the total/.test(text(guessed)), text(guessed));
+  ok('…and nothing was recorded', pendingOf(env, id).length === 0);
+  const badBasis = await callTool(env, 'add_trip_options', { price_basis: 'maybe', options: [leg] });
+  ok('an unknown basis is refused too', badBasis.body.result.isError && pendingOf(env, id).length === 0);
+  const noCount = await callTool(env, 'add_trip_options', { price_basis: 'per_traveler', options: [leg] });
+  ok('per_traveler without a traveler count is refused', noCount.body.result.isError && /how many people/.test(text(noCount)) && pendingOf(env, id).length === 0, text(noCount));
+  const zero = await callTool(env, 'add_trip_options', { price_basis: 'per_traveler', travelers: 0, options: [leg] });
+  ok('zero travelers is refused', zero.body.result.isError);
+
+  const two = await callTool(env, 'add_trip_options', { price_basis: 'per_traveler', travelers: 2, options: [leg, { kind: 'hotel', place: 'Paris', name: 'Hotel A', price: 280, currency: 'USD', per_night: true, nights: 3 }, { kind: 'flight', from: 'PAR', to: 'NYC', note: '45,000 points' }] });
+  const stored = pendingOf(env, id);
+  const flight = stored.find((o) => o.carrier === 'Delta');
+  const hotel = stored.find((o) => o.category === 'stay');
+  ok('per traveler x 2: the server totals the flight', !two.body.result.isError && flight && flight.price.low === 2124 && flight.price.currency === 'USD', JSON.stringify(flight && flight.price));
+  ok('…and notes the figure as shown', flight && /USD 1062 per traveler × 2/.test(flight.detail) && /fare: Delta Main Basic/.test(flight.detail), flight && flight.detail);
+  ok('a hotel (per room) is not multiplied', hotel && hotel.price.low === 280 && !/per traveler/.test(hotel.detail || ''));
+  ok('an option with no price needs no basis and is untouched', stored.some((o) => /45,000 points/.test(o.detail) && o.price === null));
+
+  const solo = await callTool(env, 'add_trip_options', { price_basis: 'per_traveler', travelers: 1, options: [{ ...leg, from: 'NYC', to: 'ROM', price: 700 }] });
+  const soloFlight = pendingOf(env, id).find((o) => o.group === 'NYC → ROM');
+  ok('one traveler leaves the price as shown, no note', !solo.body.result.isError && soloFlight && soloFlight.price.low === 700 && !/per traveler/.test(soloFlight.detail));
+  await callTool(env, 'add_trip_options', { price_basis: 'total', options: [{ ...leg, from: 'NYC', to: 'MAD', price: 900 }] });
+  ok('"total" records the price exactly as given', pendingOf(env, id).find((o) => o.group === 'NYC → MAD').price.low === 900);
+  const noPriceNoBasis = await callTool(env, 'add_trip_options', { options: [{ kind: 'flight', from: 'NYC', to: 'LIS', note: '30,000 points' }] });
+  ok('options with no cash price can be recorded without a basis', !noPriceNoBasis.body.result.isError);
+  const tools = (await rpc(env, 'tools/list')).body.result.tools;
+  const add = tools.find((t) => t.name === 'add_trip_options');
+  ok('the schema advertises price_basis and travelers', add.inputSchema.properties.price_basis.enum.join() === 'total,per_traveler' && !!add.inputSchema.properties.travelers);
+}
+
 // ---- add / update / remove ----
 {
   const env = makeEnv();
   const id = (text(await callTool(env, 'create_trip', { title: 'T' })).match(/trip (t[\w-]+)/) || [])[1];
-  const added = await callTool(env, 'add_trip_options', {
+  const added = await callTool(env, 'add_trip_options', { price_basis: 'total',
     source: 'Capital One Travel', window: '21-24 Oct',
     options: [
       { kind: 'flight', from: 'NYC', to: 'PAR', departure: '18:30', arrival: '07:45', carrier: 'Air France', stops: 0, price: 612, currency: 'USD' },
@@ -156,13 +193,13 @@ const PLAN = [
   const hotel = stored.find((o) => o.category === 'stay');
   ok('the hotel groups under its city', hotel && hotel.group === 'Paris' && hotel.label === 'Le Marais Boutique' && hotel.perNight && hotel.nights === 3);
   ok('a points-only fare has no cash price', stored.find((o) => o.departure === '22:10').price === null);
-  const again = await callTool(env, 'add_trip_options', { window: '21-24 Oct', options: [{ kind: 'flight', from: 'NYC', to: 'PAR', departure: '18:30', arrival: '07:45', carrier: 'Air France', stops: 0, price: 612, currency: 'USD' }] });
+  const again = await callTool(env, 'add_trip_options', { price_basis: 'total', window: '21-24 Oct', options: [{ kind: 'flight', from: 'NYC', to: 'PAR', departure: '18:30', arrival: '07:45', carrier: 'Air France', stops: 0, price: 612, currency: 'USD' }] });
   ok('re-recording the same option does not duplicate it', pendingOf(env, id).length === 4, text(again));
-  ok('nothing valid is an error result', (await callTool(env, 'add_trip_options', { options: [{ kind: 'flight', price: 1 }] })).body.result.isError === true);
-  ok('no options is an error result', (await callTool(env, 'add_trip_options', { options: [] })).body.result.isError === true);
+  ok('nothing valid is an error result', (await callTool(env, 'add_trip_options', { price_basis: 'total', options: [{ kind: 'flight', price: 1 }] })).body.result.isError === true);
+  ok('no options is an error result', (await callTool(env, 'add_trip_options', { price_basis: 'total', options: [] })).body.result.isError === true);
 
   // A link back to the result, web links only.
-  const withUrl = await callTool(env, 'add_trip_options', { options: [
+  const withUrl = await callTool(env, 'add_trip_options', { price_basis: 'total', options: [
     { kind: 'flight', from: 'NYC', to: 'LIS', price: 300, currency: 'USD', url: 'https://travel.example.com/flights/123?x=1' },
     { kind: 'flight', from: 'NYC', to: 'MAD', price: 310, currency: 'USD', url: 'javascript:alert(1)' },
   ] });
@@ -226,7 +263,7 @@ const PLAN = [
 
   // Claude sees the planner's trip and records into it.
   ok('Claude sees the trip the planner saved', /plannerTrip1/.test(text(await callTool(env, 'list_trips', {}))));
-  await callTool(env, 'add_trip_options', { options: [
+  await callTool(env, 'add_trip_options', { price_basis: 'total', options: [
     { kind: 'flight', from: 'NYC', to: 'PAR', departure: '23:00', price: 700, currency: 'USD' },
     { kind: 'hotel', place: 'Paris', name: 'Hotel C', price: 250, currency: 'EUR' },
   ] });
@@ -273,7 +310,7 @@ const PLAN = [
   ok('re-capturing the same page does not duplicate', again.waiting === 2, JSON.stringify(again));
 
   // The same flight Claude records dedupes against the extension's capture.
-  await callTool(env, 'add_trip_options', { tripId: 'tripAAAAAA1', options: [{ kind: 'flight', from: 'NYC', to: 'PAR', departure: '18:30', arrival: '07:45', carrier: 'Air France', price: 612, currency: 'USD' }] });
+  await callTool(env, 'add_trip_options', { price_basis: 'total', tripId: 'tripAAAAAA1', options: [{ kind: 'flight', from: 'NYC', to: 'PAR', departure: '18:30', arrival: '07:45', carrier: 'Air France', price: 612, currency: 'USD' }] });
   ok('Claude and the extension share one review list', pendingOf(env, 'tripAAAAAA1').filter((o) => o.carrier === 'Air France').length === 1);
 
   const notes = await (await post('/trips/active/offers', { notes: 'Flight: IST → MUN, 06:45-09:10, €210', source: 'selection' })).json();

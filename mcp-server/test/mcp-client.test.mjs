@@ -56,7 +56,7 @@ try {
   ok('create_trip works in the real runtime', !!tripId && !created.isError, created.text);
 
   // KV list() is eventually consistent in production, but tripId is explicit here.
-  const added = await T('add_trip_options', {
+  const added = await T('add_trip_options', { price_basis: 'total',
     tripId, source: 'Capital One Travel', window: '21-24 Oct',
     options: [
       { kind: 'flight', from: 'NYC', to: 'PAR', departure: '18:30', arrival: '07:45', carrier: 'Air France', price: 612, currency: 'USD' },

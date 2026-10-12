@@ -25,8 +25,7 @@
 //   GET    /api/TOKEN/trips/ID/pending     planner: options waiting for review
 //   POST   /api/TOKEN/trips/ID/ack         planner: { ids } reviewed — forget them
 //   GET|PUT /api/TOKEN/active              the trip open in the planner: { tripId }
-//   POST   /api/TOKEN/trips/ID/offers      any capture tool (browser extension,
-//                                          bookmarklet): { offers?, notes?, source? }
+//   POST   /api/TOKEN/trips/ID/offers      a capture tool (the browser extension): { offers?, notes?, source? }
 //                                          into that trip's review list. ID may
 //                                          be "active" — the trip open in the planner.
 //
@@ -49,7 +48,9 @@ const COMBO_CAP = 4000;
 const DEFAULT_ORIGINS = ['https://bgra1123.github.io', 'http://localhost:3000', 'http://127.0.0.1:3000'];
 const TRIP_ID_RE = /^[A-Za-z0-9_-]{6,40}$/;
 
-const INSTRUCTIONS = `This server holds the user's trips in their trip planner. Typical use: the user shares a screenshot of search results from a booking site or credit-card travel portal, or dictates a flight or hotel; record every option with add_trip_options. Only record what is actually stated or shown — never estimate or invent a price, time, or airline. If a price is per person, multiply by the number of travelers before recording it (ask how many if it isn't clear), and say you did. If the user corrects something you recorded, use update_trip_option; to drop one, remove_trip_option (both need the option's id, shown by list_pending_options and add_trip_options). Options land in the planner's review list and the user taps Add there — tell them they are waiting for review, not added. Only call create_trip when the user asks for a new trip.`;
+const INSTRUCTIONS = `This server holds the user's trips in their trip planner. Typical use: the user shares a screenshot of search results from a booking site or credit-card travel portal, or dictates a flight or hotel; record every option with add_trip_options. Only record what is actually stated or shown — never estimate or invent a price, time, or airline. If a price is per person, multiply by the number of travelers before recording it (ask how many if it isn't clear), and say you did. If the user corrects something you recorded, use update_trip_option; to drop one, remove_trip_option (both need the option's id, shown by list_pending_options and add_trip_options). Options land in the planner's review list and the user taps Add there — tell them they are waiting for review, not added. Only call create_trip when the user asks for a new trip.
+
+To find public options, use whatever flight, hotel or train search tools the user has connected (other connectors in this chat), then record the results here with add_trip_options: one entry per result you want them to consider, copying each price, time and carrier exactly as the search returned it, with the search's name as source (e.g. "Expedia") and the date range as window. Use the currency the search quoted, and totals for everyone travelling. Search results are live quotes that can change, so say so and never present one as booked. Do not book anything. Do not record results you did not see.`;
 
 const TRIP_ID_PROP = { type: 'string', description: 'Trip id from list_trips. Optional when the user has exactly one trip.' };
 

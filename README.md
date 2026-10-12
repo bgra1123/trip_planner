@@ -76,7 +76,7 @@ address bar.
 **Easiest: tell Claude.** With the TripAgent connector set up once
 ([docs/CLAUDE-CONNECTOR.md](docs/CLAUDE-CONNECTOR.md)), attach a screenshot of
 your card portal's results in the Claude app, or just say the flight out loud
-("New York to Paris, 6:30 pm, $612 for the two of us"), and say which trip it
+("New York to Paris, 6:30 pm, $612 for the two of us"), or ask it to search ("find flights NYC to Paris on 21 Oct") using the travel connectors you have in the Claude app, and say which trip it
 is for. Claude records the options; they're waiting in the planner for review
 the next time you open it. Correct them by voice too ("the Air France one is
 $640"). No API key needed. TripAgent is the one server for Claude and the
@@ -91,14 +91,10 @@ review before anything is added. This works for pages only you can see
 in your browser and is sent only to api.anthropic.com — use a dedicated key
 with a spend limit.
 
-**Or the bookmarklet.** The browser extension can't run on iPhone at all — no iOS browser, Chrome
-included, supports extensions (Apple requires them all to run on Safari's
-engine). The substitute is a **bookmarklet**: a Safari bookmark that runs the
-same scraper the extension uses, then opens the planner with the result
-ready to review. Open **`/capture.html`** on the deployed site for the
-one-time install steps. See [docs/BOOKMARKLET.md](docs/BOOKMARKLET.md) for
-how it works and [extension/README.md](extension/README.md) for why real
-extensions can't make the trip.
+**On iPhone, why not the browser extension?** No iOS browser, Chrome included,
+supports extensions (Apple requires them all to run on Safari's engine), so
+there's nothing to install there. The Claude connector and the screenshot
+reader above are the iPhone routes. See [extension/README.md](extension/README.md).
 
 ## 🛠️ Project Structure
 

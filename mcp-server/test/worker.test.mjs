@@ -82,6 +82,7 @@ const PLAN = [
   ok('initialize echoes a supported protocol version', init.body.result.protocolVersion === '2025-06-18');
   ok('initialize names the server TripAgent', init.body.result.serverInfo.name === 'tripagent');
   ok('initialize carries usage instructions', /screenshot/.test(init.body.result.instructions));
+  ok('the instructions tell Claude to record public search results here', /connected/.test(init.body.result.instructions) && /Do not book/.test(init.body.result.instructions));
   const future = await rpc(env, 'initialize', { protocolVersion: '2099-01-01' });
   ok('an unknown protocol version gets our latest', future.body.result.protocolVersion === '2025-11-25');
   const note = await worker.fetch(new Request(`${BASE}/mcp/${TOKEN}`, { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) }), env);
@@ -234,7 +235,7 @@ const PLAN = [
   ok('deleting a trip drops its pending options too', pendingOf(env, 'plannerTrip1').length === 0);
 }
 
-// ---- capture endpoint + active trip (browser extension, bookmarklet) ----
+// ---- capture endpoint + active trip (browser extension) ----
 {
   const env = makeEnv();
   const post = (path, body, raw) => api(env, 'POST', path, body).then((r) => r);

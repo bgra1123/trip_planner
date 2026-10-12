@@ -171,14 +171,10 @@ is a **Safari Web Extension**, a separate packaging (via
 ships through the App Store, not as an unpacked folder.
 
 Even with that conversion, right-click capture has no iOS equivalent — touch
-screens have no right-click, and there's no automatic capture-on-page-load
-either (a bookmarklet only runs when tapped). The real substitute is the
-**capture bookmarklet** — open `/capture.html` on the deployed site — which
-runs the same `scrapers.js` against whatever page is open in Safari and
-hands the result to the planner. See
-[docs/BOOKMARKLET.md](../docs/BOOKMARKLET.md) for how it works. Falling
-back to the planner's **Quick Add** form (type the price in by hand) always
-works too, on any device.
+screens have no right-click, and there's no automatic capture-on-page-load.
+On iPhone, share a screenshot (or speak the details) with Claude through the
+TripAgent connector, use the planner's **Read screenshot**, or type the price
+into **Quick Add**. All of them work on any device.
 
 ## Pointing at a different planner URL
 

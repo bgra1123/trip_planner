@@ -11,6 +11,12 @@ they share the same trips:
   way. (Use voice input in the Claude app; there is nothing extra to set up.)
 - **Correct it by voice.** *"The Air France one is actually $640"* or
   *"drop the hotel"*. Claude changes or removes what it recorded.
+- **Search public options.** *"Find flights from New York to Paris on Oct 21
+  and add the good ones to my Paris trip."* Claude uses whatever travel search
+  connectors you have in the Claude app (for example Expedia, Kiwi.com,
+  Booking.com, Tripadvisor), then records the results through TripAgent for you
+  to review. TripAgent doesn't search anything itself; it's where the results
+  are kept, compared and ranked.
 - **Ask about your trip.** *"What's my cheapest way to do this trip?"* Claude
   reads the planner's own plan and ranks the combinations the way the
   planner does.
@@ -89,6 +95,14 @@ is. (You can also paste the URL into the extension popup.) If TripAgent isn't
 set up or can't be reached, the extension falls back to pushing into an open
 planner tab, as before. Captures from Chrome and from Claude land in the same
 review list and de-duplicate against each other.
+
+**Searching public options.** Add the travel connectors you want in Claude's
+Settings → Connectors, then ask in plain words. Claude searches, records the
+results with the search's name as the source, and tells you they're waiting in
+your planner. Search results are live quotes: fares and rooms can change, and
+nothing is booked. Ask Claude to re-search if a result gets old. A card portal
+(Capital One, Amex) has no public search, so those still come in through a
+screenshot or the browser extension.
 
 **Several trips.** The bar at the top of the planner switches between trips and
 creates, renames and deletes them. Deleting a trip also deletes it from

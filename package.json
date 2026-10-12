@@ -22,10 +22,8 @@
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
-    "prebuild": "node scripts/build-bookmarklet.mjs",
     "predeploy": "npm run build",
     "deploy": "gh-pages -d build",
-    "bookmarklet": "node scripts/build-bookmarklet.mjs",
     "backend": "node backend/server.mjs",
     "tripagent:selftest": "node scripts/tripagent-selftest.mjs",
     "report": "node scripts/generate-report.mjs"

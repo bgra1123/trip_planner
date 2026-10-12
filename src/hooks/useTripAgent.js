@@ -7,7 +7,7 @@
 // bad scrape can never quietly rewrite a plan they were working on.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { listenForExtension, requestCapturedOffers, clearExtensionOffers, consumeBookmarkletCapture } from '../utils/tripAgentBridge.js';
+import { listenForExtension, requestCapturedOffers, clearExtensionOffers } from '../utils/tripAgentBridge.js';
 import { mergeOffers, offersToRows, offersFromNotesText, normalizeOffers } from '../utils/tripAgentOffers.js';
 import { searchFlights } from '../utils/tripAgentApi.js';
 import { fetchPendingOffers, ackOffers } from '../utils/connectorSync.js';
@@ -41,9 +41,6 @@ export default function useTripAgent() {
         setExtension({ connected: true, version: status.version });
       },
     });
-    // The listener above is what actually catches this — see
-    // consumeBookmarkletCapture's own comment for why it exists.
-    consumeBookmarkletCapture();
     return () => { mounted.current = false; stop(); };
   }, []);
 

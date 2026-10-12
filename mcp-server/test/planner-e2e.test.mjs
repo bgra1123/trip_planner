@@ -65,7 +65,7 @@ try {
   const made = await say('create_trip', { title: 'Rome in May' });
   const romeId = (made.match(/trip (t[\w-]+)/) || [])[1];
   await say('add_trip_options', { tripId: romeId, source: 'Capital One Travel', options: [
-    { kind: 'flight', from: 'NYC', to: 'ROM', departure: '18:30', arrival: '07:45', carrier: 'ITA', price: 612, currency: 'USD' },
+    { kind: 'flight', from: 'NYC', to: 'ROM', departure: '18:30', arrival: '07:45', carrier: 'ITA', price: 612, currency: 'USD', url: 'https://portal.example.com/results/ita-612' },
     { kind: 'flight', from: 'NYC', to: 'ROM', departure: '22:10', arrival: '11:30', carrier: 'Delta', price: 548, currency: 'USD' },
     { kind: 'hotel', place: 'Rome', name: 'Hotel Tiber', price: 280, currency: 'USD', per_night: true, nights: 3 },
   ] });
@@ -108,6 +108,8 @@ try {
   let body = await page.locator('body').innerText();
   record('opening the trip stages Claude\'s three options and the extension\'s one', /4 options from Claude waiting/.test(body) && /Add all 4 to table/.test(body));
   record('the staged flight shows its dollar price', /\$612/.test(body) && /\$548/.test(body));
+  record('a staged option links back to its portal page', await page.locator('a[href="https://portal.example.com/results/ita-612"]').count() === 1);
+  record('a staged option shows how old its price is', /(just now|min ago)/.test(body));
   record('staging does not consume them on the server', (await api(`/trips/${romeId}/pending`)).offers.length === 4);
 
   // A spoken correction: Claude changes the price and drops the hotel.

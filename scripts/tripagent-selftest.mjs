@@ -13,7 +13,7 @@
 import {
   normalizeTime, normalizePrice, normalizeOffer, normalizeOffers,
   offerToRow, offersToRows, offerCostText, rowCostIsParseable, mergeOffers,
-  offersFromNotesText, currenciesNeedingRate, offerFromLink, rowFromQuickEntry,
+  offersFromNotesText, currenciesNeedingRate, offerFromLink, rowFromQuickEntry, safeHttpUrl, capturedAgo,
 } from '../src/utils/tripAgentOffers.js';
 import { groupRows, parseNotes, defaultSelection, buildExportData, parseCost, convertToBase } from '../src/utils/parseTripNotes.js';
 import {
@@ -694,6 +694,19 @@ for (const blocked of ['chrome://settings', 'about:blank', 'devtools://devtools/
   try { await extractNotesFromImages([{ mediaType: 'image/heic', data: 'x' }], { client: fakeClient({}) }); } catch (err) { badType = err.message; }
   ok('an unsupported image type is refused before any API call', /not a supported image type/.test(badType), badType);
 }
+
+// ---- source links and price age ------------------------------------------
+check('an https link is kept', safeHttpUrl(' https://travel.example.com/a?b=1 '), 'https://travel.example.com/a?b=1');
+check('a javascript: link is dropped', safeHttpUrl('javascript:alert(1)'), '');
+check('a data: link is dropped', safeHttpUrl('data:text/html,<script>1</script>'), '');
+check('a non-URL is dropped', safeHttpUrl('not a url'), '');
+check('an offer never carries a script URL', normalizeOffer({ kind: 'flight', from: 'A', to: 'B', price: { amount: 1, currency: 'USD' }, url: 'javascript:alert(1)' }).sourceUrl, '');
+const T0 = Date.parse('2026-10-12T12:00:00Z');
+check('seconds old reads as just now', capturedAgo('2026-10-12T11:59:30Z', T0), { label: 'just now', stale: false });
+check('minutes', capturedAgo('2026-10-12T11:30:00Z', T0), { label: '30 min ago', stale: false });
+check('hours', capturedAgo('2026-10-12T07:00:00Z', T0), { label: '5h ago', stale: false });
+check('a day or more is flagged for a recheck', capturedAgo('2026-10-10T12:00:00Z', T0), { label: '2d ago', stale: true });
+check('an unreadable time shows nothing rather than a guess', capturedAgo('whenever', T0), { label: '', stale: false });
 
 // ---- trip store ----------------------------------------------------------
 {

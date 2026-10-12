@@ -96,6 +96,26 @@ set up or can't be reached, the extension falls back to pushing into an open
 planner tab, as before. Captures from Chrome and from Claude land in the same
 review list and de-duplicate against each other.
 
+**Adding from a card portal (Capital One, Amex, …).** These show prices only
+when you're logged in, so Claude can't look them up for you. Three ways in, best
+first:
+
+1. **Copy the page text.** On the results page, select all, copy, and paste it
+   into the Claude chat with *"add these to my Paris trip"*. Text is more
+   reliable than a picture, works on iPhone, and Claude ignores the menus and
+   filters around the results.
+2. **Share a screenshot.** Quicker to take, but small print can be misread, so
+   glance at the prices Claude repeats back.
+3. **The Chrome extension** (desktop): one click on the results page, no Claude
+   needed.
+
+Claude records the cash price in the card's currency (usually USD), puts any
+miles/points price in the note, never counts points as cash, and notes the
+program for hotels (for example Amex Fine Hotels + Resorts). Each option keeps a
+link back to the page it came from when Claude knows it, and the review list
+shows how old each price is, flagging anything over a day: portal fares move, so
+recheck before you rely on an old one.
+
 **Searching public options.** Add the travel connectors you want in Claude's
 Settings → Connectors, then ask in plain words. Claude searches, records the
 results with the search's name as the source, and tells you they're waiting in

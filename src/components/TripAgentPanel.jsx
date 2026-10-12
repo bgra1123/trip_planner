@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import useTripAgent from '../hooks/useTripAgent.js';
-import { offerCostText, rowCostIsParseable, offerPreviewRow, currenciesNeedingRate, offerFromLink, offerToRow, categoryForKind, rowFromQuickEntry } from '../utils/tripAgentOffers.js';
+import { offerCostText, rowCostIsParseable, offerPreviewRow, currenciesNeedingRate, offerFromLink, offerToRow, categoryForKind, rowFromQuickEntry, capturedAgo } from '../utils/tripAgentOffers.js';
 import { costTextIssue } from '../utils/parseTripNotes.js';
 import { extractNotesFromImages, withWindow } from '../utils/screenshotExtract.js';
 import { imageFileToUpload } from '../utils/imageForUpload.js';
@@ -507,6 +507,10 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
                             {o.sourceUrl
                               ? <a href={o.sourceUrl} target="_blank" rel="noreferrer noopener" className="text-blue-600 underline">{o.source}</a>
                               : o.source}
+                            {(() => {
+                              const age = capturedAgo(o.capturedAt);
+                              return age.label ? <div className={`text-[0.6rem] ${age.stale ? 'text-amber-700' : 'text-slate-400'}`} title="Portal prices change — recheck an old one before relying on it.">{age.stale ? `${age.label} · recheck` : age.label}</div> : null;
+                            })()}
                           </td>
                           <td className="px-2 py-1.5 whitespace-nowrap">
                             <button type="button" onClick={() => addOffers([o.id])} className="text-blue-600 hover:underline px-1">Add</button>

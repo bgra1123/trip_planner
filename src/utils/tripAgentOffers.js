@@ -155,6 +155,34 @@ function hash(text) {
   return h.toString(36);
 }
 
+// A link back to the page an offer came from. Only web links are kept: an
+// offer can arrive from outside the page (a server, a capture tool), and this
+// URL ends up in an <a href>, where "javascript:" would run code.
+export function safeHttpUrl(value) {
+  const text = clean(value);
+  if (!text) return '';
+  try {
+    const url = new URL(text);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
+// How long ago an offer was captured, for a person to judge whether a fare is
+// still worth believing. Portal prices move; a day-old fare is a hint, not a
+// quote.
+export function capturedAgo(capturedAt, now = Date.now()) {
+  const t = Date.parse(capturedAt || '');
+  if (Number.isNaN(t)) return { label: '', stale: false };
+  const minutes = Math.max(0, Math.round((now - t) / 60000));
+  if (minutes < 2) return { label: 'just now', stale: false };
+  if (minutes < 60) return { label: `${minutes} min ago`, stale: false };
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return { label: `${hours}h ago`, stale: false };
+  return { label: `${Math.round(hours / 24)}d ago`, stale: true };
+}
+
 // Identity of an offer for dedupe purposes: the same flight captured twice
 // (a reload, a second tab, the extension and Claude both reporting it) collapses
 // to one entry, while a genuinely different price or time does not.
@@ -222,7 +250,7 @@ export function normalizeOffer(raw, defaults = {}) {
     label: clean(raw.label || raw.title || place),
     detail: clean(raw.detail || raw.description),
     source: clean(raw.source || defaults.source) || 'unknown',
-    sourceUrl: clean(raw.sourceUrl || raw.url || defaults.sourceUrl),
+    sourceUrl: safeHttpUrl(raw.sourceUrl || raw.url || defaults.sourceUrl),
     capturedAt: clean(raw.capturedAt) || new Date().toISOString(),
   };
   offer.id = clean(raw.id) || stableId(offer);

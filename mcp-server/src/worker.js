@@ -48,7 +48,7 @@ const COMBO_CAP = 4000;
 const DEFAULT_ORIGINS = ['https://bgra1123.github.io', 'http://localhost:3000', 'http://127.0.0.1:3000'];
 const TRIP_ID_RE = /^[A-Za-z0-9_-]{6,40}$/;
 
-const INSTRUCTIONS = `This server holds the user's trips in their trip planner. Typical use: the user shares a screenshot of search results from a booking site or credit-card travel portal, or dictates a flight or hotel; record every option with add_trip_options. Only record what is actually stated or shown — never estimate or invent a price, time, or airline. If a price is per person, multiply by the number of travelers before recording it (ask how many if it isn't clear), and say you did. If the user corrects something you recorded, use update_trip_option; to drop one, remove_trip_option (both need the option's id, shown by list_pending_options and add_trip_options). Options land in the planner's review list and the user taps Add there — tell them they are waiting for review, not added. Only call create_trip when the user asks for a new trip.
+const INSTRUCTIONS = `This server holds the user's trips in their trip planner. Typical use: the user shares a screenshot, or pastes the text of a results page, from a booking site or credit-card travel portal (Capital One Travel, Amex Travel and the like), or dictates a flight or hotel; record every option with add_trip_options. Pasted page text is more reliable than a screenshot — read the numbers from it exactly, and ignore menus, filters and ads around the results. Card portals quote in the card's currency (usually USD) and often show a miles/points price beside the cash price: the cash price goes in price, the points go in note, never the other way round. Hotels from a card program (e.g. Amex Fine Hotels + Resorts) get the program name in note. Only record what is actually stated or shown — never estimate or invent a price, time, or airline. If a price is per person, multiply by the number of travelers before recording it (ask how many if it isn't clear), and say you did. If the user corrects something you recorded, use update_trip_option; to drop one, remove_trip_option (both need the option's id, shown by list_pending_options and add_trip_options). Options land in the planner's review list and the user taps Add there — tell them they are waiting for review, not added. Only call create_trip when the user asks for a new trip.
 
 To find public options, use whatever flight, hotel or train search tools the user has connected (other connectors in this chat), then record the results here with add_trip_options: one entry per result you want them to consider, copying each price, time and carrier exactly as the search returned it, with the search's name as source (e.g. "Expedia") and the date range as window. Use the currency the search quoted, and totals for everyone travelling. Search results are live quotes that can change, so say so and never present one as booked. Do not book anything. Do not record results you did not see.`;
 
@@ -68,6 +68,7 @@ const OPTION_PROPERTIES = {
   currency: { type: 'string', description: 'ISO 4217 code of that price, e.g. "USD", "EUR". Required whenever price is given.' },
   per_night: { type: 'boolean', description: 'True if the hotel price is per night rather than for the whole stay.' },
   nights: { type: 'integer', minimum: 1, description: 'Number of nights, for a per-night hotel price.' },
+  url: { type: 'string', description: 'Link to the page this result came from (https://…), if you know it, so the user can reopen the exact result.' },
   note: { type: 'string', description: 'Anything else worth keeping: a points/miles price ("45,000 points" — never put points in price), card program ("Amex FHR"), traveler count ("2 travelers"), refundability, cabin.' },
 };
 
@@ -93,7 +94,7 @@ const TOOLS = [
   {
     name: 'add_trip_options',
     title: 'Add trip options',
-    description: 'Record travel options the user found — read from a screenshot of search results, or dictated — into a trip for their review. Include every option, one entry each. Prices are totals for everyone travelling: if a displayed price is per person, multiply it by the number of travelers (ask if unknown) and mention that in note. If a price is only points or miles, leave price out and put the points in note. Do not invent or estimate anything that was not stated or shown.',
+    description: 'Record travel options the user found — read from a screenshot or pasted page text of search results, or dictated — into a trip for their review. Include every option, one entry each. Prices are totals for everyone travelling: if a displayed price is per person, multiply it by the number of travelers (ask if unknown) and mention that in note. If a price is only points or miles, leave price out and put the points in note. Do not invent or estimate anything that was not stated or shown.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -297,6 +298,7 @@ function rawFromOption(option, windowLabel) {
     perNight: option.per_night,
     nights: option.nights,
     detail: option.note,
+    sourceUrl: option.url,
     window: windowLabel,
   };
   return { raw, problems };
@@ -367,12 +369,13 @@ function rawFromOffer(o) {
     perNight: o.perNight,
     nights: o.nights,
     detail: o.detail,
+    sourceUrl: o.sourceUrl,
     window: o.window,
     capturedAt: o.capturedAt,
   };
 }
 
-const CHANGE_TO_RAW = { from: 'from', to: 'to', place: 'place', name: 'label', departure: 'departure', arrival: 'arrival', carrier: 'carrier', stops: 'stops', per_night: 'perNight', nights: 'nights', note: 'detail', window: 'window', kind: 'kind' };
+const CHANGE_TO_RAW = { from: 'from', to: 'to', place: 'place', name: 'label', departure: 'departure', arrival: 'arrival', carrier: 'carrier', stops: 'stops', per_night: 'perNight', nights: 'nights', note: 'detail', url: 'sourceUrl', window: 'window', kind: 'kind' };
 
 async function updateTripOption(args, env, token) {
   const changes = args.changes && typeof args.changes === 'object' ? args.changes : null;

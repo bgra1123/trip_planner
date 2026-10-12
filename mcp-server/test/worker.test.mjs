@@ -82,6 +82,7 @@ const PLAN = [
   ok('initialize echoes a supported protocol version', init.body.result.protocolVersion === '2025-06-18');
   ok('initialize names the server TripAgent', init.body.result.serverInfo.name === 'tripagent');
   ok('initialize carries usage instructions', /screenshot/.test(init.body.result.instructions));
+  ok('the instructions cover pasted portal text, points vs cash and hotel programs', /Pasted page text/.test(init.body.result.instructions) && /miles\/points/.test(init.body.result.instructions) && /Fine Hotels/.test(init.body.result.instructions));
   ok('the instructions tell Claude to record public search results here', /connected/.test(init.body.result.instructions) && /Do not book/.test(init.body.result.instructions));
   const future = await rpc(env, 'initialize', { protocolVersion: '2099-01-01' });
   ok('an unknown protocol version gets our latest', future.body.result.protocolVersion === '2025-11-25');
@@ -159,9 +160,21 @@ const PLAN = [
   ok('nothing valid is an error result', (await callTool(env, 'add_trip_options', { options: [{ kind: 'flight', price: 1 }] })).body.result.isError === true);
   ok('no options is an error result', (await callTool(env, 'add_trip_options', { options: [] })).body.result.isError === true);
 
+  // A link back to the result, web links only.
+  const withUrl = await callTool(env, 'add_trip_options', { options: [
+    { kind: 'flight', from: 'NYC', to: 'LIS', price: 300, currency: 'USD', url: 'https://travel.example.com/flights/123?x=1' },
+    { kind: 'flight', from: 'NYC', to: 'MAD', price: 310, currency: 'USD', url: 'javascript:alert(1)' },
+  ] });
+  const lis = pendingOf(env, id).find((o) => o.group === 'NYC → LIS');
+  const mad = pendingOf(env, id).find((o) => o.group === 'NYC → MAD');
+  ok('a result keeps its link back', lis && lis.sourceUrl === 'https://travel.example.com/flights/123?x=1', text(withUrl));
+  ok('a non-web link is dropped, the option kept', mad && mad.sourceUrl === '' && mad.price.low === 310);
+  const setUrl = await callTool(env, 'update_trip_option', { optionId: mad.id, changes: { url: 'https://travel.example.com/flights/456' } });
+  ok('the link can be corrected by voice too', !setUrl.body.result.isError && pendingOf(env, id).some((o) => o.group === 'NYC → MAD' && o.sourceUrl === 'https://travel.example.com/flights/456'), text(setUrl));
+
   // Spoken correction: "the Air France flight is actually $640, departs 19:00".
   const listed = text(await callTool(env, 'list_pending_options', {}));
-  ok('list shows ids and what is waiting', /4 options waiting/.test(listed) && /Air France/.test(listed), listed);
+  ok('list shows ids and what is waiting', /6 options waiting/.test(listed) && /Air France/.test(listed), listed);
   const afId = stored.find((o) => o.carrier === 'Air France').id;
   ok('the id in the list matches storage', listed.includes(`[${afId}]`));
   const upd = await callTool(env, 'update_trip_option', { optionId: afId, changes: { price: 640, departure: '19:00' } });
@@ -170,7 +183,7 @@ const PLAN = [
   const after = pendingOf(env, id);
   const af2 = after.find((o) => o.carrier === 'Air France');
   ok('price and time changed; currency, route, window kept', af2 && af2.price.low === 640 && af2.price.currency === 'USD' && af2.departure === '19:00' && af2.arrival === '07:45' && af2.group === 'NYC → PAR' && af2.window === '21-24 Oct', JSON.stringify(af2));
-  ok('an update replaces, not duplicates', after.length === 4);
+  ok('an update replaces, not duplicates', after.length === 6);
   ok('the old id is gone and a new one is reported', !after.some((o) => o.id === afId) && updMsg.includes(`[${af2.id}]`));
   const stale = await callTool(env, 'update_trip_option', { optionId: afId, changes: { price: 1 } });
   ok('updating a stale id is an error, not a silent no-op', stale.body.result.isError && /No option/.test(text(stale)));

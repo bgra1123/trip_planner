@@ -73,8 +73,11 @@ var TripAgentScrapers = (function () {
     return { id: 'unknown', kind: guessKind(url, doc), rootSelectors: [], generic: true };
   }
 
+  // innerText keeps the line breaks between a card's elements; textContent can
+  // run them together ("$1,062DeltaDeltaJFK"), which no pattern can read.
   function text(node) {
-    return (node && node.textContent ? node.textContent : '').replace(/\s+/g, ' ').trim();
+    var raw = node ? (node.innerText || node.textContent || '') : '';
+    return raw.replace(/\s+/g, ' ').trim();
   }
 
   // ---- Route detection from the URL -------------------------------------
@@ -278,6 +281,47 @@ var TripAgentScrapers = (function () {
     return words.length ? words[0].slice(0, 40) : '';
   }
 
+  // Portals print a result as: depart, duration, arrive, price, airline (often
+  // twice, once as a logo's text), "JFK - CDG", the fare name, stops, perks. The
+  // pieces are located by what they look like, not by position alone, since
+  // rendered text order shifts with the layout.
+  var CARD_ROUTE_RE = /\b([A-Z]{3})\s?[-\u2013\u2192]\s?([A-Z]{3})\b/;
+
+  function routeFromCard(content) {
+    var m = content.match(CARD_ROUTE_RE);
+    return m && m[1] !== m[2] ? { from: m[1], to: m[2], at: m.index, length: m[0].length } : null;
+  }
+
+  // "Delta Delta" -> "Delta"
+  function collapseRepeat(name) {
+    var m = /^(.{2,40}?)\s+\1$/i.exec(String(name).trim());
+    return m ? m[1] : String(name).trim();
+  }
+
+  // The airline sits between the price and the route; the fare name between the
+  // route and the stop count ("Delta Main Basic", "Light").
+  function carrierAndFare(content, routeInfo) {
+    var carrier = '';
+    var fare = '';
+    if (routeInfo) {
+      var before = content.slice(0, routeInfo.at);
+      var afterPrice = before.match(/(?:[$\u20ac\u00a3\u20ba]\s?[\d,.]+|\b(?:EUR|USD|GBP|TRY|CHF)\s?[\d,.]+)\s+([A-Za-z][A-Za-z .&'-]{1,60}?)\s*$/);
+      if (afterPrice) carrier = collapseRepeat(afterPrice[1]);
+      var after = content.slice(routeInfo.at + routeInfo.length);
+      var between = after.match(/^\s+(.{1,60}?)\s+(?:nonstop|direct|\d\s?stops?)\b/i);
+      if (between) fare = between[1].trim();
+    }
+    return { carrier: carrier, fare: fare };
+  }
+
+  function clockMinutes(t) {
+    var m = /^(\d{1,2}):(\d{2})\s?(AM|PM)?$/i.exec(String(t).trim());
+    if (!m) return null;
+    var h = parseInt(m[1], 10) % 12 + (m[3] && m[3].toUpperCase() === 'PM' ? 12 : 0);
+    if (!m[3]) h = parseInt(m[1], 10);
+    return h * 60 + parseInt(m[2], 10);
+  }
+
   // ---- Strategy 0: bank travel portals -----------------------------------
   // Same conservative shape as the generic heuristic, but it knows the card's
   // currency, and it separates a points fare from a cash one.
@@ -304,11 +348,22 @@ var TripAgentScrapers = (function () {
       var detail = [];
       if (points) detail.push(points + ' (points — not counted as cash)');
 
+      // The card's own airports beat the page URL's (which may be city codes
+      // like NYC, or a different leg of the trip).
+      var cardRoute = routeFromCard(content);
+      var parts = carrierAndFare(content, cardRoute);
+      if (parts.fare) detail.push('fare: ' + parts.fare);
+      // An arrival clock earlier than the departure clock means the next day
+      // (local times, and no flight is over 24 hours here).
+      var dep = clockMinutes(times[0]);
+      var arr = clockMinutes(times[1]);
+      if (dep !== null && arr !== null && arr < dep) detail.push('arrives next day');
+
       offers.push({
         kind: 'flight',
-        from: route ? route.from : '',
-        to: route ? route.to : '',
-        carrier: carrierFrom(content),
+        from: cardRoute ? cardRoute.from : (route ? route.from : ''),
+        to: cardRoute ? cardRoute.to : (route ? route.to : ''),
+        carrier: parts.carrier || collapseRepeat(carrierFrom(content)),
         departure: times[0] || '',
         arrival: times[1] || '',
         duration: durationMatch ? durationMatch[0] : '',
@@ -355,7 +410,7 @@ var TripAgentScrapers = (function () {
   return {
     scrape: scrape, detectSite: detectSite, routeFromUrl: routeFromUrl,
     placeFromUrl: placeFromUrl, pointsIn: pointsIn, cashPriceIn: cashPriceIn,
-    guessKind: guessKind, BANK_PORTALS: BANK_PORTALS,
+    guessKind: guessKind, BANK_PORTALS: BANK_PORTALS, routeFromCard: routeFromCard, collapseRepeat: collapseRepeat,
   };
 })();
 

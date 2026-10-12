@@ -83,6 +83,7 @@ const PLAN = [
   ok('initialize names the server TripAgent', init.body.result.serverInfo.name === 'tripagent');
   ok('initialize carries usage instructions', /screenshot/.test(init.body.result.instructions));
   ok('the instructions cover pasted portal text, points vs cash and hotel programs', /Pasted page text/.test(init.body.result.instructions) && /miles\/points/.test(init.body.result.instructions) && /Fine Hotels/.test(init.body.result.instructions));
+  ok('the instructions describe the Capital One result layout and ask about travelers', /JFK - CDG/.test(init.body.result.instructions) && /how many travelers/.test(init.body.result.instructions) && /airport codes/.test(init.body.result.instructions));
   ok('the instructions tell Claude to record public search results here', /connected/.test(init.body.result.instructions) && /Do not book/.test(init.body.result.instructions));
   const future = await rpc(env, 'initialize', { protocolVersion: '2099-01-01' });
   ok('an unknown protocol version gets our latest', future.body.result.protocolVersion === '2025-11-25');

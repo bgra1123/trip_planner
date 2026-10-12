@@ -695,6 +695,35 @@ for (const blocked of ['chrome://settings', 'about:blank', 'devtools://devtools/
   ok('an unsupported image type is refused before any API call', /not a supported image type/.test(badType), badType);
 }
 
+// ---- Capital One result cards, as the page really renders them ------------
+{
+  const cards = [
+    '5:30 PM\n7h 15m\n5:45 AM\n$1,062\nDelta\nDelta\nJFK - CDG\nDelta Main Basic\nNonstop\nEarn 5X miles on flights',
+    '6:30 PM\n7h 15m\n6:45 AM\n$1,062\nDelta\nDelta\nJFK - CDG\nDelta Main Basic\nNonstop\nEarn 5X miles on flights',
+    '2:00 AM\n7h 5m\n2:05 PM\n$1,062\nAir France\nAir France\nJFK - CDG\nLight\nNonstop\nEarn 5X miles on flights',
+  ];
+  // innerText (line breaks kept) is what a browser gives; textContent may not be.
+  const nodes = cards.map((t) => ({ innerText: t, textContent: t.replace(/\n/g, '') }));
+  const doc = { querySelectorAll: (sel) => (sel === 'li' ? nodes : []) };
+  const got = scrapers.scrape(doc, 'https://travel.capitalone.com/flights/shop/?origin=NYC&destination=PAR', null);
+  check('all three result cards are captured', got.length, 3);
+  check('the route comes from the card\'s airports, not the url\'s city codes', [got[0].from, got[0].to], ['JFK', 'CDG']);
+  check('the airline printed twice is read once', [got[0].carrier, got[2].carrier], ['Delta', 'Air France']);
+  check('times and duration', [got[0].departure, got[0].arrival, got[0].duration], ['5:30 PM', '5:45 AM', '7h 15m']);
+  check('a comma price keeps its dollar sign', got[0].price, '$1,062');
+  check('nonstop is zero stops', got[0].stops, 0);
+  ok('the fare name is kept (Basic fares have restrictions)', /fare: Delta Main Basic/.test(got[0].detail) && /fare: Light/.test(got[2].detail), got[0].detail + ' | ' + got[2].detail);
+  ok('an overnight arrival is flagged', /arrives next day/.test(got[0].detail) && !/arrives next day/.test(got[2].detail), got[0].detail + ' | ' + got[2].detail);
+  ok('"Earn 5X miles" is a perk, never a points price', !/points/.test(got[0].detail) && got[0].price === '$1,062');
+  const normalized = normalizeOffers(got, {});
+  check('they normalize to one route group with dollar prices', [new Set(normalized.map((o) => o.group)).size, normalized[0].price.currency], [1, 'USD']);
+
+  // The same cards if only textContent exists and elements ran together.
+  const glued = cards.map((t) => ({ textContent: t.replace(/\n/g, ' ') }));
+  const gotGlued = scrapers.scrape({ querySelectorAll: (sel) => (sel === 'li' ? glued : []) }, 'https://travel.capitalone.com/flights/shop/', null);
+  check('space-separated text reads the same', gotGlued.map((o) => [o.from, o.to, o.carrier, o.price]), got.map((o) => [o.from, o.to, o.carrier, o.price]));
+}
+
 // ---- source links and price age ------------------------------------------
 check('an https link is kept', safeHttpUrl(' https://travel.example.com/a?b=1 '), 'https://travel.example.com/a?b=1');
 check('a javascript: link is dropped', safeHttpUrl('javascript:alert(1)'), '');

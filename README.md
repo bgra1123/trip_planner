@@ -10,6 +10,7 @@ An interactive React-based trip planning tool that optimizes your Europe itinera
 - **Flexible Stay Duration**: Drag slider to adjust Milan stay (1–7 days)
 - **Family-Friendly Recommendations**: Optimized for travel with infant
 - **Cost Breakdown**: Real-time cost estimation for flights and train
+- **Several Trips**: Keep a named trip per journey; with the TripAgent connector, Claude sees the same trips
 - **Multi-Currency**: Mix EUR, USD, GBP, TRY and CHF; set `RATE:` lines to fold them into one total
 - **Price Capture**: Right-click any price, scrape supported portals, or search flights via the backend
 - **Responsive Design**: Works seamlessly on mobile (iOS), tablet, and desktop
@@ -72,11 +73,15 @@ address bar.
 
 ## 📌 Capturing prices on iPhone
 
-**Easiest: share the screenshot with Claude.** With the Claude connector set
-up once ([docs/CLAUDE-CONNECTOR.md](docs/CLAUDE-CONNECTOR.md)), attach a
-screenshot of your card portal's results in the Claude app and say "add these
-to my trip planner". Claude records the options; they're waiting in the
-planner for review the next time you open it. No API key needed.
+**Easiest: tell Claude.** With the TripAgent connector set up once
+([docs/CLAUDE-CONNECTOR.md](docs/CLAUDE-CONNECTOR.md)), attach a screenshot of
+your card portal's results in the Claude app, or just say the flight out loud
+("New York to Paris, 6:30 pm, $612 for the two of us"), and say which trip it
+is for. Claude records the options; they're waiting in the planner for review
+the next time you open it. Correct them by voice too ("the Air France one is
+$640"). No API key needed. TripAgent is the one server for Claude and the
+planner, so they share the same trips and Claude can show your trip's path and
+rank its cheapest combinations.
 
 **Or read it in the planner.** Take a screenshot of your card portal's results,
 open the planner's **TripAgent capture** panel, pick the screenshot under
@@ -102,7 +107,8 @@ trip_planner/
 ├── src/
 │   ├── components/
 │   │   ├── TripPlanner.jsx       # Main component
-│   │   └── TripAgentPanel.jsx    # Staging panel for captured offers
+│   │   ├── TripAgentPanel.jsx    # Staging panel for captured offers
+│   │   └── TripBar.jsx           # Switch / create / rename / delete trips
 │   ├── hooks/
 │   │   └── useTripAgent.js       # Collects offers from extension + backend
 │   ├── utils/
@@ -145,7 +151,7 @@ one covers every site, which is exactly why there are several.
 | **Automatic scraping** (`extension/`) | Google Flights, Kayak, Skyscanner, Booking.com, Trainline, DB | none | a site redesigns |
 | **Bank travel portals** (`extension/` + `backend/`) | Capital One, Amex — in your logged-in session | none | a portal redesigns |
 | **Backend flight search** (`backend/`) | Amadeus, via `npm run backend` | fill a form | an API key expires |
-| **Claude connector** (`mcp-server/`) | a screenshot shared with Claude in the Claude app, any device | attach it, say "add these to my trip planner" | one-time Cloudflare deploy — see [docs/CLAUDE-CONNECTOR.md](docs/CLAUDE-CONNECTOR.md) |
+| **TripAgent connector** (`mcp-server/`) | a screenshot or spoken details shared with Claude in the Claude app, any device | attach it or speak, say which trip | one-time Cloudflare deploy — see [docs/CLAUDE-CONNECTOR.md](docs/CLAUDE-CONNECTOR.md) |
 | **Read screenshot** (TripAgent panel) | a screenshot of any page — including a card portal only you can see — on any device, iPhone included | pick the image, tap Read | needs your own Anthropic API key (well under a cent per screenshot, using Claude Haiku) |
 | **Screenshot transcription CLI** (`scripts/extract-screenshot.mjs`) | the same, from the command line | run the CLI | needs `ANTHROPIC_API_KEY` |
 

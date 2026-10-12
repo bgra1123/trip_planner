@@ -1,35 +1,32 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   groupRows, linesToRows, newRow, newRowId, bumpRowIdCounter, costLabel, euro, sumRange, enumerateCombinations,
   convertToBase, buildExportData, toMarkdown, deriveRouteChain, DEFAULT_TRIP_NOTES, costTextIssue,
 } from '../utils/parseTripNotes';
 import TripAgentPanel from './TripAgentPanel';
+import TripBar from './TripBar';
+import useTripSync, { ConnectorContext } from '../hooks/useTripSync';
+import {
+  loadStore, saveStore, makeTrip, emptySnapshot, setSnapshot, renameTrip, addTrip, selectTrip, removeTrip,
+} from '../utils/tripStore';
 import { cardProgramForStay } from '../utils/hotelCardBenefits';
 
 function ratesToRows(rates) {
   return Object.entries(rates || {}).map(([code, factor]) => ({ id: newRowId(), code, factor: String(factor) }));
 }
 
-const STORAGE_KEY = 'trip-planner:v1';
-
-// Reads the last-saved trip once per mount. Bumps the row-id counter past
-// any restored id so a freshly added row can never collide with one that
+// Readies a trip's saved state for the workspace. Bumps the row-id counter
+// past any restored id so a freshly added row can never collide with one that
 // was persisted — the counter itself resets to 1 on every page load, but
-// restored rows keep their original ids.
-function loadSavedState() {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const data = JSON.parse(raw);
-    if (!data || typeof data !== 'object' || !Array.isArray(data.rows)) return null;
-    bumpRowIdCounter([
-      ...data.rows.map((r) => r.id),
-      ...(Array.isArray(data.rateRows) ? data.rateRows.map((r) => r.id) : []),
-    ]);
-    return data;
-  } catch {
-    return null;
-  }
+// restored rows keep their original ids. A null snapshot is the very first
+// trip of a new user, which starts as the example.
+function prepareSnapshot(data) {
+  if (!data || typeof data !== 'object' || !Array.isArray(data.rows)) return null;
+  bumpRowIdCounter([
+    ...data.rows.map((r) => r.id),
+    ...(Array.isArray(data.rateRows) ? data.rateRows.map((r) => r.id) : []),
+  ]);
+  return data;
 }
 
 const COMBO_DISPLAY_LIMIT = 3;
@@ -82,10 +79,13 @@ function reconcileForWindow(parsed, prev, w) {
   return { travel: fix(parsed.travel, prev.travel), stay: fix(parsed.stay, prev.stay), activity };
 }
 
-export default function TripPlanner() {
+// One trip's workspace. The parent keys it by trip id, so switching trips
+// mounts a fresh one from that trip's snapshot; every change is reported up
+// through onSnapshot (the parent stores it and syncs it).
+function TripWorkspace({ initial, onSnapshot }) {
   // Read once on mount; restored fields fall back to the example trip
   // individually so a partially-corrupt save still recovers gracefully.
-  const [saved] = useState(loadSavedState);
+  const [saved] = useState(() => prepareSnapshot(initial));
   const [notesText, setNotesText] = useState(() => (saved && typeof saved.notesText === 'string') ? saved.notesText : DEFAULT_TRIP_NOTES);
   const [rows, setRows] = useState(() => (saved && Array.isArray(saved.rows)) ? saved.rows : linesToRows(DEFAULT_TRIP_NOTES).rows);
   const [notes, setNotes] = useState(() => (saved && Array.isArray(saved.notes)) ? saved.notes : linesToRows(DEFAULT_TRIP_NOTES).notes);
@@ -131,17 +131,11 @@ export default function TripPlanner() {
     setSelection((prev) => reconcileForWindow(parsed, prev, w));
   }
 
-  // Auto-save the trip so a reload doesn't lose it. localStorage can throw
-  // (private browsing, quota, disabled) — degrade to in-memory-only rather
-  // than crash the app.
+  // Report every change so the trip is saved (and synced) — a reload doesn't
+  // lose it.
   useEffect(() => {
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        version: 1, notesText, rows, notes, rateRows, selection, activeWindow,
-      }));
-    } catch {
-      // ignore — editing still works for the rest of this session
-    }
+    onSnapshot({ version: 1, notesText, rows, notes, rateRows, selection, activeWindow });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notesText, rows, notes, rateRows, selection, activeWindow]);
 
   function convertNotesToTable() {
@@ -878,5 +872,37 @@ export default function TripPlanner() {
 
       </div>
     </div>
+  );
+}
+
+// The trips: which one is open, saved in this browser, and shared with Claude
+// through the TripAgent server when a connector is set.
+export default function TripPlanner() {
+  const [store, setStore] = useState(() => {
+    try { return loadStore(window.localStorage); } catch { return loadStore({ getItem: () => null }); }
+  });
+  useEffect(() => { try { saveStore(window.localStorage, store); } catch { /* in-memory only */ } }, [store]);
+
+  const { connectorUrl, setConnectorUrl, sync, syncNow } = useTripSync(store, setStore);
+  const trip = store.trips.find((t) => t.id === store.activeId) || store.trips[0];
+
+  const onSnapshot = useCallback((snapshot) => setStore((s) => setSnapshot(s, trip.id, snapshot)), [trip.id]);
+  const connector = useMemo(() => ({ connectorUrl, setConnectorUrl, tripId: trip.id, sync }), [connectorUrl, setConnectorUrl, trip.id, sync]);
+
+  return (
+    <ConnectorContext.Provider value={connector}>
+      <TripBar
+        trips={store.trips}
+        activeId={trip.id}
+        connected={!!connectorUrl}
+        sync={sync}
+        onSelect={(id) => setStore((s) => selectTrip(s, id))}
+        onNew={(title) => setStore((s) => addTrip(s, makeTrip(title, emptySnapshot())))}
+        onRename={(title) => setStore((s) => renameTrip(s, trip.id, title))}
+        onDelete={() => setStore((s) => removeTrip(s, trip.id))}
+        onSync={syncNow}
+      />
+      <TripWorkspace key={trip.id} initial={trip.snapshot} onSnapshot={onSnapshot} />
+    </ConnectorContext.Provider>
   );
 }

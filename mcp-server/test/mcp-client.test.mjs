@@ -26,6 +26,7 @@ function startWorker() {
       cwd: path.join(here, '..'),
       env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CI: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
     });
     let log = '';
     const timer = setTimeout(() => { proc.kill(); reject(new Error(`wrangler dev did not start:\n${log}`)); }, 60_000);
@@ -90,7 +91,7 @@ try {
 } catch (err) {
   failures.push(`unexpected error: ${err.stack || err}`);
 } finally {
-  proc.kill('SIGTERM');
+  try { process.kill(-proc.pid, 'SIGTERM'); } catch { proc.kill('SIGTERM'); }
 }
 
 if (failures.length) {

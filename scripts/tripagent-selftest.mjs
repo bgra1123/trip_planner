@@ -23,6 +23,10 @@ import { toOffers, humanDuration } from '../backend/amadeus.mjs';
 import { sampleFlights } from '../backend/sample.mjs';
 import { validateFlightQuery, handleIngest, paramsFromBody } from '../backend/server.mjs';
 import { ingest, cachedFor, aggregate, summary, clear as clearIngested } from '../backend/aggregator.mjs';
+import {
+  loadStore, saveStore, STORE_KEY, LEGACY_KEY, emptySnapshot, makeTrip, setSnapshot, renameTrip, addTrip, selectTrip,
+  removeTrip, forgetDeleted, adoptRemoteTrip, replaceFromRemote, markSynced, isDirty,
+} from '../src/utils/tripStore.js';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -766,6 +770,58 @@ for (const blocked of ['chrome://settings', 'about:blank', 'devtools://devtools/
   let badType = '';
   try { await extractNotesFromImages([{ mediaType: 'image/heic', data: 'x' }], { client: fakeClient({}) }); } catch (err) { badType = err.message; }
   ok('an unsupported image type is refused before any API call', /not a supported image type/.test(badType), badType);
+}
+
+// ---- trip store ----------------------------------------------------------
+{
+  const mem = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), _m: m }; };
+
+  const fresh = loadStore(mem(), 1000);
+  ok('a new user gets one trip that starts as the example (null snapshot)', fresh.trips.length === 1 && fresh.trips[0].snapshot === null && fresh.activeId === fresh.trips[0].id);
+
+  const legacyStorage = mem();
+  const legacySnap = { version: 1, notesText: 'x', rows: [{ id: 'r1' }], notes: [], rateRows: [] };
+  legacyStorage.setItem(LEGACY_KEY, JSON.stringify(legacySnap));
+  const migrated = loadStore(legacyStorage, 1000);
+  ok('an existing single-trip save becomes the first trip, unchanged', migrated.trips.length === 1 && migrated.trips[0].snapshot.rows[0].id === 'r1');
+  ok('migration leaves the old key in place (nothing is destroyed)', legacyStorage.getItem(LEGACY_KEY) !== null);
+
+  const storage = mem();
+  saveStore(storage, migrated);
+  ok('a saved store round-trips', JSON.stringify(loadStore(storage)) === JSON.stringify(migrated));
+  storage.setItem(STORE_KEY, '{not json');
+  ok('a corrupt store falls back instead of throwing', loadStore(storage, 1).trips.length === 1);
+
+  const a = migrated.trips[0];
+  const same = setSnapshot(migrated, a.id, JSON.parse(JSON.stringify(legacySnap)), 5000);
+  ok('reporting an unchanged snapshot does not mark the trip edited', same === migrated);
+  const edited = setSnapshot(migrated, a.id, { ...legacySnap, notesText: 'y' }, 5000);
+  ok('a real change bumps updatedAt and makes the trip unsynced', edited.trips[0].updatedAt === 5000 && isDirty(edited.trips[0]));
+  const synced = markSynced(edited, a.id, 5000);
+  ok('markSynced clears the unsynced state', !isDirty(synced.trips[0]));
+  ok('markSynced ignores a stale push (edited while it was in flight)', isDirty(markSynced(setSnapshot(edited, a.id, { ...legacySnap, notesText: 'z' }, 6000), a.id, 5000).trips[0]));
+
+  ok('rename updates title and updatedAt', renameTrip(synced, a.id, '  Paris  ', 7000).trips[0].title === 'Paris' && isDirty(renameTrip(synced, a.id, 'Paris', 7000).trips[0]));
+  ok('renaming to blank or the same title is a no-op', renameTrip(synced, a.id, '   ') === synced && renameTrip(synced, a.id, a.title) === synced);
+
+  const two = addTrip(synced, makeTrip('Rome', emptySnapshot(), 8000));
+  ok('a new trip is added and opened', two.trips.length === 2 && two.activeId === two.trips[1].id);
+  ok('selecting an unknown trip is ignored', selectTrip(two, 'nope') === two);
+
+  const removed = removeTrip(two, two.trips[1].id);
+  ok('deleting the open trip opens another and remembers the deletion', removed.trips.length === 1 && removed.activeId === a.id && removed.deletedIds.includes(two.trips[1].id));
+  ok('forgetDeleted drops the tombstone', forgetDeleted(removed, two.trips[1].id).deletedIds.length === 0);
+  const last = removeTrip(removed, a.id);
+  ok('deleting the last trip leaves a fresh empty one, never zero', last.trips.length === 1 && last.trips[0].id !== a.id && last.trips[0].snapshot.rows.length === 0);
+
+  const remote = { id: 'tclaude123', title: 'Lisbon', createdAt: 100, updatedAt: 200, snapshot: null };
+  const adopted = adoptRemoteTrip(synced, remote);
+  ok('a server trip with no snapshot is adopted as an empty trip (not the example)', adopted.trips.length === 2 && adopted.trips[1].snapshot.rows.length === 0 && !isDirty(adopted.trips[1]));
+  ok('adopting does not change which trip is open', adopted.activeId === synced.activeId);
+  ok('adopting twice does not duplicate', adoptRemoteTrip(adopted, remote).trips.length === 2);
+  const pulled = replaceFromRemote(adopted, { ...remote, title: 'Lisbon 2', updatedAt: 900, snapshot: { ...emptySnapshot(), notesText: 'from elsewhere' } });
+  ok('a newer server copy replaces the local one and is in sync', pulled.trips[1].title === 'Lisbon 2' && pulled.trips[1].snapshot.notesText === 'from elsewhere' && !isDirty(pulled.trips[1]));
+  ok('a server copy with no usable snapshot never overwrites', replaceFromRemote(adopted, { ...remote, snapshot: null }) === adopted);
 }
 
 // ---- report --------------------------------------------------------------

@@ -203,7 +203,7 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
           <div className="mb-2 pb-3 border-b border-slate-100">
             {connectorUrl ? (
               <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="text-[0.65rem] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700">Claude connector on</span>
+                <span className="text-[0.65rem] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700">TripAgent connected</span>
                 <span className="text-slate-500">
                   {connector.busy ? 'Checking for options from Claude…'
                     : connector.lastCount === null ? 'Options Claude records will appear below.'
@@ -219,7 +219,7 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
                 className="flex flex-wrap items-end gap-2"
               >
                 <label className="text-[0.65rem] uppercase tracking-wide text-slate-500">
-                  <span className="block mb-1">Claude connector URL</span>
+                  <span className="block mb-1">TripAgent connector URL</span>
                   <input
                     type="url"
                     value={connectorDraft}
@@ -240,8 +240,9 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
             {connector.error && <p className="text-xs text-red-600 mt-2">{connector.error}</p>}
             <p className="text-xs text-slate-500 mt-2">
               Share a portal screenshot with Claude in the Claude app and ask it to add the prices to your trip — they
-              show up here for review, no API key needed. One-time setup: deploy the connector and paste the same URL you
-              gave Claude (see docs/CLAUDE-CONNECTOR.md).
+              show up here for review, no API key needed. Your trips are shared with Claude too, so it can see them and
+              correct what it recorded. One-time setup: deploy TripAgent and paste the same URL you gave Claude (see
+              docs/CLAUDE-CONNECTOR.md).
             </p>
           </div>
 

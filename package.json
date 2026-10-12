@@ -24,7 +24,6 @@
     "eject": "react-scripts eject",
     "predeploy": "npm run build",
     "deploy": "gh-pages -d build",
-    "backend": "node backend/server.mjs",
     "tripagent:selftest": "node scripts/tripagent-selftest.mjs",
     "report": "node scripts/generate-report.mjs"
   },

@@ -14,8 +14,6 @@
     "http://localhost:3000/*",
     "http://127.0.0.1:3000/*",
     "https://bgra1123.github.io/trip_planner/*",
-    "http://localhost:8787/*",
-    "http://127.0.0.1:8787/*",
     "https://*.workers.dev/*"
   ],
   "optional_host_permissions": [

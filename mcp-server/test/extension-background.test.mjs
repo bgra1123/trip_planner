@@ -138,6 +138,24 @@ try {
     record('…and is parsed by the planner\'s grammar', (await pending()).some((o) => o.group === 'IST → MUN' && o.price.currency === 'EUR'));
   }
 
+  // -- automatic capture on a known travel site (content script) --
+  {
+    const { send, pushed } = loadBackground();
+    await send({ type: 'SET_CONNECTOR', url: CONNECTOR_URL });
+    await api('/trips/tripAUTO001', { method: 'PUT', body: JSON.stringify({ title: 'Auto', snapshot: { rows: [], notes: [], rateRows: [] } }) });
+    await api('/active', { method: 'PUT', body: JSON.stringify({ tripId: 'tripAUTO001' }) });
+    const auto = [{ kind: 'flight', from: 'LHR', to: 'JFK', departure: '09:00', arrival: '12:00', carrier: 'BA', price: { low: 410, high: 410, currency: 'GBP' }, source: 'kayak' }];
+    const first = await send({ type: 'CAPTURED', offers: auto, site: 'kayak' });
+    const waiting = (await api('/trips/tripAUTO001/pending')).offers;
+    record('an automatic capture goes to TripAgent', first.ok && first.added === 1 && waiting.length === 1 && waiting[0].price.currency === 'GBP', JSON.stringify(waiting));
+    record('…and is not also pushed to the planner tab', pushed.length === 0);
+    await send({ type: 'CAPTURED', offers: auto, site: 'kayak' });
+    record('the same page seen again is not re-posted or duplicated', (await api('/trips/tripAUTO001/pending')).offers.length === 1);
+    await api('/trips/tripAUTO001', { method: 'DELETE' });
+    await api('/trips/tripOPEN001', { method: 'PUT', body: JSON.stringify({ title: 'Paris', snapshot: { rows: [], notes: [], rateRows: [] } }) });
+    await api('/active', { method: 'PUT', body: JSON.stringify({ tripId: 'tripOPEN001' }) });
+  }
+
   // -- following the open trip --
   {
     const { chrome, send } = loadBackground();

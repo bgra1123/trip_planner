@@ -34,10 +34,9 @@ Load the extension, in Chrome:
 Keep the planner tab open in the background from here on — captures push
 into it automatically.
 
-*(Optional, for live flight search instead of the manual capture below:
-`npm run backend` in a second terminal, and set `AMADEUS_CLIENT_ID` /
-`AMADEUS_CLIENT_SECRET` for real prices — see `backend/README.md`. Without
-those it runs on sample data, clearly labelled as such.)*
+*(Optional: set up TripAgent ([CLAUDE-CONNECTOR.md](CLAUDE-CONNECTOR.md)) and
+captures are kept for you on any device, and you can ask Claude to search
+public flights and hotels for you.)*
 
 ## 1. Capture your portal's offers
 

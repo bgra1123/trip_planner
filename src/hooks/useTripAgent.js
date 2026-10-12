@@ -1,6 +1,6 @@
-// Collects offers from both TripAgent sources — the Chrome extension
-// (push, via window.postMessage) and the backend flight proxy (pull, via
-// fetch) — into one staging list.
+// Collects offers from the TripAgent sources — the Chrome extension
+// (push, via window.postMessage) and Claude through the TripAgent server
+// (pull, via fetch) — into one staging list.
 //
 // Staging is deliberate: captured offers do NOT go straight into the
 // planner table. The user reviews them and adds the ones they want, so a
@@ -9,7 +9,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { listenForExtension, requestCapturedOffers, clearExtensionOffers } from '../utils/tripAgentBridge.js';
 import { mergeOffers, offersToRows, offersFromNotesText, normalizeOffers } from '../utils/tripAgentOffers.js';
-import { searchFlights } from '../utils/tripAgentApi.js';
 import { fetchPendingOffers, ackOffers } from '../utils/connectorSync.js';
 
 import { useConnector } from './useTripSync.js';
@@ -22,7 +21,6 @@ export default function useTripAgent() {
   // rate they captured isn't silently dropped.
   const [capturedRates, setCapturedRates] = useState({});
   const [extension, setExtension] = useState({ connected: false, version: null });
-  const [search, setSearch] = useState({ busy: false, error: null, live: null, provider: null, sources: [], ingestedCount: 0, providerError: null });
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -42,29 +40,6 @@ export default function useTripAgent() {
       },
     });
     return () => { mounted.current = false; stop(); };
-  }, []);
-
-  const runFlightSearch = useCallback(async (query) => {
-    setSearch({ busy: true, error: null, live: null, provider: null });
-    try {
-      const result = await searchFlights(query);
-      if (!mounted.current) return;
-      setOffers((prev) => mergeOffers(prev, result.offers));
-      setSearch({
-        busy: false,
-        error: result.offers.length ? null : 'Backend returned no offers for that route and date.',
-        live: result.live,
-        provider: result.provider,
-        sources: result.sources,
-        ingestedCount: result.ingestedCount,
-        // The API failing while scraped portal data still answered is worth
-        // saying out loud: the results are real but incomplete.
-        providerError: result.providerError,
-      });
-    } catch (err) {
-      if (!mounted.current) return;
-      setSearch({ busy: false, error: err.message, live: null, provider: null });
-    }
   }, []);
 
   // ---- Claude connector (mcp-server/) ------------------------------------
@@ -164,7 +139,7 @@ export default function useTripAgent() {
   }, [offers, forgetOnConnector]);
 
   return {
-    offers, capturedRates, extension, search, runFlightSearch, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor, stageNotes,
+    offers, capturedRates, extension, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor, stageNotes,
     connectorUrl, setConnectorUrl, connector, pullFromClaude,
   };
 }

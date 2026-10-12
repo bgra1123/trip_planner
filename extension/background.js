@@ -20,12 +20,6 @@ const OPTIONS_KEY = 'tripagent.options';
 const MAX_OFFERS = 200;
 const MENU_ID = 'trip-planner-capture';
 
-// Where bank-portal captures are forwarded, so the aggregator can merge them
-// with API results later — including when this browser tab is long closed.
-// Best-effort only: the extension works perfectly well with no backend, and a
-// failed post is never surfaced as an error.
-const DEFAULT_BACKEND = 'http://localhost:8787';
-
 // ---- TripAgent server -------------------------------------------------------
 // The one place trips live. Captures are posted to whichever trip is open in
 // the planner and wait there for the user's Add, so they show up on any
@@ -176,34 +170,6 @@ function version() {
   return chrome.runtime.getManifest().version;
 }
 
-// Forward to the aggregator's ingest endpoint. Only captures from a source
-// worth keeping server-side go here — a bank portal is the case that matters,
-// since nothing but this extension can ever reach it.
-async function forwardToBackend(source, offers, overrides) {
-  if (!source || !offers.length) return;
-  const options = await readOptions();
-  if (options.backendEnabled === false) return;
-  const base = (options.backendUrl || DEFAULT_BACKEND).replace(/\/+$/, '');
-  const first = offers[0] || {};
-  try {
-    await fetch(`${base}/api/flights/ingest`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        source,
-        offers,
-        searchParams: {
-          from: (overrides && overrides.from) || first.from || '',
-          to: (overrides && overrides.to) || first.to || '',
-          date: (overrides && overrides.date) || '',
-        },
-      }),
-    });
-  } catch (err) {
-    // No backend running is the normal case, not a problem worth reporting.
-  }
-}
-
 // ---- selection captures (context menu) -----------------------------------
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -273,7 +239,6 @@ async function captureFromTab(tab, overrides) {
           offers: scrapers.scrape(document, location.href, opts),
           site: site.id,
           kind: site.kind,
-          isBankPortal: scrapers.BANK_PORTALS.indexOf(site.id) !== -1,
           sourceUrl: location.href,
         };
       },
@@ -296,9 +261,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'CAPTURED': {
         const offers = message.offers || [];
         const result = await addOffers(offers);
+        // Only when something new was found: automatic capture fires on every
+        // page change, and the same results shouldn't be re-posted each time.
         if (result.added) {
-          await pushToPlanner({ type: 'PUSH_OFFERS', offers });
-          if (message.isBankPortal) await forwardToBackend(message.site, offers, message.overrides);
+          const server = await sendToServer({ offers, source: 'extension' });
+          if (!server.ok) await pushToPlanner({ type: 'PUSH_OFFERS', offers });
         }
         sendResponse({ ok: true, ...result });
         break;
@@ -373,7 +340,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const server = offers.length ? await sendToServer({ offers, source: 'extension' }) : { ok: false, notConfigured: true };
         if (result.added) {
           if (!server.ok) await pushToPlanner({ type: 'PUSH_OFFERS', offers });
-          if (reply && reply.isBankPortal) await forwardToBackend(reply.site, offers, message.overrides);
         }
         sendResponse({ ok: true, captured: offers.length, site: reply && reply.site, server, ...result });
         break;

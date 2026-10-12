@@ -19,10 +19,6 @@ import { groupRows, parseNotes, defaultSelection, buildExportData, parseCost, co
 import {
   HOTEL_CARD_PROGRAMS, detectCardProgram, cardProgramForStay,
 } from '../src/utils/hotelCardBenefits.js';
-import { toOffers, humanDuration } from '../backend/amadeus.mjs';
-import { sampleFlights } from '../backend/sample.mjs';
-import { validateFlightQuery, handleIngest, paramsFromBody } from '../backend/server.mjs';
-import { ingest, cachedFor, aggregate, summary, clear as clearIngested } from '../backend/aggregator.mjs';
 import {
   loadStore, saveStore, STORE_KEY, LEGACY_KEY, emptySnapshot, makeTrip, setSnapshot, renameTrip, addTrip, selectTrip,
   removeTrip, forgetDeleted, adoptRemoteTrip, replaceFromRemote, markSynced, isDirty,
@@ -296,44 +292,17 @@ const differentHotel = normalizeOffer({ kind: 'hotel', label: 'Hotel Lombardia',
 check('a genuinely different stay is not collapsed',
   mergeOffers([], [hotelViaJsonLd, differentHotel]).length, 2);
 
-// ---- backend mapping -----------------------------------------------------
-check('humanDuration', humanDuration('PT7H20M'), '7h 20m');
-check('humanDuration days', humanDuration('P1DT2H'), '26h');
-const amadeusOffers = toOffers({
-  dictionaries: { carriers: { TK: 'TURKISH AIRLINES' } },
-  data: [{
-    validatingAirlineCodes: ['TK'],
-    price: { total: '2100.00', currency: 'EUR' },
-    itineraries: [
-      { duration: 'PT3H45M', segments: [
-        { carrierCode: 'TK', departure: { iataCode: 'IST', at: '2026-08-14T06:45:00' }, arrival: { iataCode: 'VIE', at: '2026-08-14T08:15:00' } },
-        { carrierCode: 'TK', departure: { iataCode: 'VIE', at: '2026-08-14T09:30:00' }, arrival: { iataCode: 'MUC', at: '2026-08-14T10:30:00' } },
-      ] },
-      { duration: 'PT3H40M', segments: [
-        { carrierCode: 'TK', departure: { iataCode: 'MUC', at: '2026-08-19T18:00:00' }, arrival: { iataCode: 'IST', at: '2026-08-19T21:40:00' } },
-      ] },
-    ],
-  }],
-});
-check('amadeus yields both legs', amadeusOffers.length, 2);
-check('amadeus counts stops', amadeusOffers[0].stops, 1);
-check('amadeus resolves the carrier name', amadeusOffers[0].carrier, 'Turkish Airlines');
-// A round trip is quoted once; pricing the return leg too would double it.
-ok('amadeus prices only the outbound leg', amadeusOffers[0].price !== null && amadeusOffers[1].price === null);
-
-// ---- request validation --------------------------------------------------
-ok('validateFlightQuery accepts a good query', !!validateFlightQuery(new URLSearchParams('from=IST&to=MUC&date=2026-08-14')).query);
-ok('validateFlightQuery rejects a bad code', !!validateFlightQuery(new URLSearchParams('from=ISTANBUL&to=MUC&date=2026-08-14')).errors);
-ok('validateFlightQuery rejects an identical route', !!validateFlightQuery(new URLSearchParams('from=IST&to=IST&date=2026-08-14')).errors);
-ok('validateFlightQuery rejects a backwards return', !!validateFlightQuery(new URLSearchParams('from=IST&to=MUC&date=2026-08-14&returnDate=2026-08-01')).errors);
-ok('validateFlightQuery rejects 0 adults', !!validateFlightQuery(new URLSearchParams('from=IST&to=MUC&date=2026-08-14&adults=0')).errors);
-
 // ---- full pipeline -------------------------------------------------------
-// Sample backend offers + a scraped hotel, all the way through to the
+// Four flights for one route + a scraped hotel, all the way through to the
 // planner's own totals.
 const pipelineOffers = normalizeOffers(
-  sampleFlights({ from: 'IST', to: 'MUC', date: '2026-08-14', adults: 1, currency: 'EUR' }),
-  { kind: 'flight', source: 'sample', window: '14-19 Aug' }
+  [
+    { departure: '06:45', arrival: '08:30', carrier: 'Turkish Airlines', stops: 0, price: { amount: 2100, currency: 'EUR' } },
+    { departure: '07:25', arrival: '09:10', carrier: 'Pegasus', stops: 0, price: { amount: 1850, currency: 'EUR' } },
+    { departure: '10:00', arrival: '11:45', carrier: 'Lufthansa', stops: 0, price: { amount: 3450, currency: 'EUR' } },
+    { departure: '13:15', arrival: '17:40', carrier: 'Austrian', stops: 1, price: { amount: 2400, currency: 'EUR' } },
+  ].map((f) => ({ kind: 'flight', from: 'IST', to: 'MUC', ...f })),
+  { kind: 'flight', source: 'test', window: '14-19 Aug' }
 ).concat([hotel]);
 
 const rows = offersToRows(pipelineOffers);
@@ -546,52 +515,6 @@ const bareOffers = scrapers.scrape(bareDoc, 'https://travel.americanexpress.com/
 ok('a card with no currency marker is skipped rather than guessed',
   bareOffers.length === 0 || /USD/.test(String(bareOffers[0].price)),
   JSON.stringify(bareOffers.map((o) => o.price)));
-
-// ---- aggregator ----------------------------------------------------------
-clearIngested();
-const bankSearch = { from: 'JFK', to: 'LHR', date: '2026-10-15' };
-const BA = { kind: 'flight', from: 'JFK', to: 'LHR', departure: '10:30', arrival: '22:45', carrier: 'British Airways' };
-ingest('capital-one', [
-  { ...BA, price: { amount: 320, currency: 'USD' } },
-  { ...BA, price: { amount: 320, currency: 'USD' } },
-], bankSearch);
-ingest('amex', [{ ...BA, price: { amount: 340, currency: 'USD' } }], bankSearch);
-
-check('ingested data is found for its route', cachedFor(bankSearch).length, 3);
-check('and not for another route', cachedFor({ from: 'IST', to: 'MUC', date: '2026-10-15' }).length, 0);
-check('and not for another date', cachedFor({ ...bankSearch, date: '2026-11-01' }).length, 0);
-check('every ingesting source is summarized', Object.keys(summary().bySource).sort(), ['amex', 'capital-one']);
-
-const apiOffers = [{ kind: 'flight', from: 'JFK', to: 'LHR', departure: '18:00', arrival: '06:10', carrier: 'Virgin', price: { amount: 299, currency: 'USD' }, source: 'amadeus' }];
-const aggregated = aggregate([cachedFor(bankSearch), apiOffers]);
-check('an exact repeat from one source is dropped', aggregated.offers.length, 3);
-// Deliberately NOT deduped across sources: "Capital One wants $320, Amex wants
-// $340 for this same flight" is the comparison the whole feature exists for.
-check('the same flight from two portals is kept for comparison',
-  aggregated.offers.filter((o) => o.carrier === 'British Airways').map((o) => o.source).sort(),
-  ['amex', 'capital-one']);
-check('results are ranked cheapest first', aggregated.offers.map((o) => o.price.amount), [299, 320, 340]);
-check('every answering source is named', aggregated.sources.sort(), ['amadeus', 'amex', 'capital-one']);
-
-// An offer nobody could price sorts last rather than vanishing.
-const withUnpriced = aggregate([[{ kind: 'flight', from: 'JFK', to: 'LHR', carrier: 'Unknown', source: 'x' }], apiOffers]);
-check('an unpriced offer is kept, ranked last', withUnpriced.offers.map((o) => o.carrier), ['Virgin', 'Unknown']);
-
-// ---- ingest endpoint ----------------------------------------------------
-ok('a good ingest is accepted', handleIngest({ source: 'capital-one', flights: [BA], searchParams: bankSearch }).status === 200);
-ok('the guide\'s "flights" key is accepted', handleIngest({ source: 'amex', flights: [BA] }).status === 200);
-ok('and so is "offers"', handleIngest({ source: 'amex', offers: [BA] }).status === 200);
-check('a missing source is refused', handleIngest({ flights: [BA] }).status, 400);
-check('a path-like source is refused', handleIngest({ source: '../../etc/passwd', flights: [BA] }).status, 400);
-check('a non-array payload is refused', handleIngest({ source: 'amex', flights: 'nope' }).status, 400);
-check('an empty payload is refused', handleIngest({ source: 'amex', flights: [] }).status, 400);
-
-// The POST body shape from the guide has to land on the same validator the GET
-// endpoint uses, aliases and all.
-const fromBody = paramsFromBody({ origin: 'JFK', destination: 'LHR', departDate: '2026-10-15', passengers: 2 });
-check('the POST aliases map onto the query', validateFlightQuery(fromBody).query,
-  { from: 'JFK', to: 'LHR', date: '2026-10-15', returnDate: null, adults: 2, currency: 'EUR' });
-clearIngested();
 
 // ---- capturing from whatever tab is open ---------------------------------
 // The service worker injects the scraper on demand so capture works on pages

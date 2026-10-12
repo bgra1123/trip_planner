@@ -98,8 +98,8 @@ capture and a tuned adapter, not the ability to capture there at all.
 
 Bank travel portals require you to be logged in. The extension runs in your
 browser with your session, so authentication is simply yours — nothing about
-your credentials is read, stored or transmitted, and the backend never sees
-them.
+your credentials is read, stored or transmitted, and TripAgent never sees
+them (it receives only the offers you capture).
 
 ### How scraping works
 
@@ -157,9 +157,10 @@ fallbacks still apply. Then add the URL pattern to
   one tab, and expires. The alternative — an `<all_urls>` content script —
   would mean running on every page you ever load.
 - Host permissions — the sites with automatic capture, the planner origins, and
-  `localhost:8787` for the optional backend.
+  `*.workers.dev` so captures can reach your TripAgent server.
 
-Captured data goes to the planner tab (or your clipboard) and nowhere else.
+Captured data goes to your TripAgent server (if you set one up), an open planner
+tab, or your clipboard, and nowhere else.
 The extension makes no network requests of its own.
 
 ## On iPhone

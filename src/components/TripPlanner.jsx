@@ -334,7 +334,7 @@ function TripWorkspace({ initial, onSnapshot }) {
           <span className="text-xs text-slate-500">Fix a transcription mistake, add options, or set exchange rates.</span>
         </div>
 
-        {/* TripAgent capture (extension + backend) — outside the edit panel
+        {/* TripAgent capture (extension + Claude) — outside the edit panel
             on purpose: an offer can arrive while the data-entry tools are
             collapsed, and its "N waiting" badge has to stay visible. */}
         <TripAgentPanel onAddRows={appendRows} rates={rates} existingStayGroups={parsed.stay.map((g) => g.key)} />

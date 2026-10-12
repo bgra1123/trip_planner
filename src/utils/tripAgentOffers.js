@@ -1,7 +1,7 @@
 // TripAgent offer normalization.
 //
 // Everything that arrives from outside the app — the Chrome extension
-// scraping a booking site, or the backend flight proxy — is funnelled
+// scraping a booking site, or Claude recording a search result — is funnelled
 // through here first. The rest of the app never sees a scraper's shape:
 // it only ever sees editable table rows (the same {id, category, group,
 // option, timeText, costText, detail, window} shape parseTripNotes.js
@@ -156,7 +156,7 @@ function hash(text) {
 }
 
 // Identity of an offer for dedupe purposes: the same flight captured twice
-// (a reload, a second tab, backend + extension both reporting it) collapses
+// (a reload, a second tab, the extension and Claude both reporting it) collapses
 // to one entry, while a genuinely different price or time does not.
 export function offerKey(offer) {
   // A stay's real identity is its name: two strategies scraping the same

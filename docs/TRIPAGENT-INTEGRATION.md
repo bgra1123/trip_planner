@@ -1,7 +1,8 @@
 # TripAgent Integration
 
-How the browser extension, the web app and the backend fit together, and
-what the contract between them is.
+How the browser extension, the web app and the TripAgent server fit together,
+and what the contract between them is. (The server and Claude's tools are
+described in [CLAUDE-CONNECTOR.md](CLAUDE-CONNECTOR.md).)
 
 ## Capture works on any page
 
@@ -100,8 +101,8 @@ costs you a glance, not a rewritten itinerary.
                              │  tripAgentBridge.js     │
                              │      │                  │
                              │      ▼                  │
-                             │  tripAgentOffers.js ◀───┼──── backend
-                             │   (normalize → rows)    │   /api/flights
+                             │  tripAgentOffers.js ◀───┼──── TripAgent server
+                             │   (normalize → rows)    │   (Claude's options)
                              │      │                  │
                              │      ▼                  │
                              │  TripAgentPanel (stage) │
@@ -208,29 +209,24 @@ a third-party script cannot inject offers.
 
 ## Bank travel portals
 
-Capital One and Amex price the same flights differently from a public API, and
-neither can be queried from a server: the prices only exist inside the user's
-authenticated session. The extension is the only thing that can reach them,
-which is why the data flows the long way round:
+Capital One and Amex price the same flights differently from a public search,
+and neither can be queried from a server: the prices only exist inside the
+user's authenticated session. The extension is the only thing that can reach
+them, which is why it reads them in the browser:
 
 ```
-  authenticated portal tab              backend                 planner tab
-  ─────────────────────────             ───────                 ───────────
+  authenticated portal tab           TripAgent server            planner (any device)
+  ─────────────────────────          ────────────────            ────────────────────
   content.js scrapes card
         │
-        ├──── PUSH_OFFERS ───────────────────────────────────▶ staging panel
-        │                                (immediate)
-        └──── POST /api/flights/ingest ─▶ 2h cache
-                                             │
-                                             ▼
-                              GET /api/flights  ──▶ merged + ranked ──▶ panel
-                              (folds in the API's own results)
+        └── POST /trips/active/offers ──▶ the open trip's ──▶ review list ──▶ Add
+            (or, with no server set,        pending options
+             PUSH_OFFERS to a planner tab)
 ```
 
-The direct push is what makes capture feel instant. The ingest copy is what
-makes it survive: the tab closes, the browser restarts, and a search tomorrow
-morning still knows what Capital One was charging — until the two-hour TTL
-expires it, because a stale fare presented as current is worse than none.
+With TripAgent set up the capture is kept on the server until the user reviews
+it, so it survives the tab closing and shows up on any device. Claude sees it
+too. Without TripAgent the capture is pushed straight into an open planner tab.
 
 Two things the portal adapters are careful about:
 
@@ -244,58 +240,26 @@ Two things the portal adapters are careful about:
   redemption fee, not the fare. A points fare is recorded in the row's detail
   with no price at all, so it can be seen and never totalled.
 
-## Backend
-
-`backend/server.mjs` is a dependency-free proxy in front of a flight-search
-API. It exists so credentials never reach the browser, and so the app sees
-one offer shape no matter which provider is behind it.
-
-```
-GET  /api/health
-GET  /api/flights?from=IST&to=MUC&date=2026-08-14[&returnDate=][&adults=1][&currency=EUR]
-POST /api/flights/search    { origin, destination, departDate, passengers, … }
-POST /api/flights/ingest    { source, flights|offers, searchParams }
-GET  /api/flights/ingested?from=&to=&date=
-```
-
-Every search folds ingested portal data in with the provider's own results,
-drops exact repeats within a source, and ranks cheapest first. The same flight
-from two different portals is deliberately **not** collapsed — that comparison
-is the answer the user came for. If the API fails but portal data answered, the
-response is a `200` carrying a `providerError`: real but incomplete results beat
-none.
-
-With no credentials configured it answers with **sample data**, flagged
-`live: false` and labelled in the UI. That keeps the whole pipeline testable
-without an API key; it is not a fallback you would ever want to mistake for
-a quote. See [backend/README.md](../backend/README.md).
-
 ## Setup
 
 ```bash
 npm install
 npm start                       # the planner, http://localhost:3000
-npm run backend                 # optional, http://localhost:8787
 ```
 
 Load the extension: `chrome://extensions` → Developer mode →
 **Load unpacked** → select `extension/`. See
 [extension/README.md](../extension/README.md).
 
-Point the app at a non-default backend with
-`REACT_APP_TRIPAGENT_API=https://… npm start` (Create React App reads
-`REACT_APP_*` at build time).
-
 ## Testing
 
 ```bash
 npm run tripagent:selftest      # data pipeline, no browser or API key needed
-node scripts/tripagent-browser-test.mjs [--backend]   # needs the app running + Playwright
+node scripts/tripagent-browser-test.mjs   # needs the app running + Playwright
 ```
 
 The self-test covers time/price parsing, the offer→row conversion, the
-cost round-trip, dedupe, the Amadeus mapping, request validation, the
-scrapers against a synthetic DOM, and a full run through the planner's own
+cost round-trip, dedupe, the scrapers against a synthetic DOM, and a full run through the planner's own
 cost and combination logic. The browser test covers the bridge, its origin
 checks, and that staging never writes to the plan by itself.
 
@@ -313,9 +277,6 @@ checks, and that staging never writes to the plan by itself.
   their adapters rely on card containers and rendered text. Expect to adjust
   `rootSelectors` in `scrapers.js` when a portal is redesigned; the symptom is
   "captured nothing", and right-click capture still works meanwhile.
-- **Round trips are priced once.** Amadeus quotes one price per offer, so it
-  is attributed to the outbound leg and the return is marked
-  `return (priced with outbound)`. Pricing both would double the total.
 - **Staging is not persistent.** Scraped offers live in the extension's
   *session* store and the panel's React state, so a browser restart drops
   them. Selected prices live in *local* storage and survive, because they are
@@ -325,15 +286,8 @@ checks, and that staging never writes to the plan by itself.
 
 Not built, in rough order of usefulness:
 
-1. Hotel search, on both paths: Amadeus has a hotel API, and the portals sell
-   hotels through the same card layout the flight adapters already read. The
-   offer shape supports `perNight`/`nights` already.
-2. Real portal selector tuning against live accounts. The adapters are written
+1. Real portal selector tuning against live accounts. The adapters are written
    against the layout the portals document publicly; only a logged-in session
    shows whether `rootSelectors` need narrowing.
-3. Persisting the ingest cache. It is in-memory, so a backend restart loses
-   it; the shape is already a plain map, so a table or a JSON file would do.
-4. Public-API clients beyond Amadeus (Kayak, Skyscanner), which slot in as
-   another provider module behind `handleFlights()`.
-4. Live exchange rates, so `RATE:` lines don't have to be typed by hand.
+2. Live exchange rates, so `RATE:` lines don't have to be typed by hand.
    Conversion itself is done — only the rate source is manual.

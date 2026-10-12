@@ -41,12 +41,11 @@ function priceLabel(offer) {
 
 export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = {}, existingStayGroups = [] }) {
   const {
-    offers, capturedRates, extension, search, runFlightSearch, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor, stageNotes,
+    offers, capturedRates, extension, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor, stageNotes,
     connectorUrl, setConnectorUrl, connector, pullFromClaude,
   } = useTripAgent();
   const [connectorDraft, setConnectorDraft] = useState('');
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ from: '', to: '', date: '', adults: '1', currency: 'EUR', window: defaultWindow });
   const [linkForm, setLinkForm] = useState({ url: '', note: '' });
   // A stay captured from a page with no parseable place arrives with an
   // empty group — left alone it becomes its own disconnected itinerary leg
@@ -124,17 +123,8 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
     }
   }
 
-  function setField(field, value) {
-    setForm((f) => ({ ...f, [field]: value }));
-  }
-
   function setLinkField(field, value) {
     setLinkForm((f) => ({ ...f, [field]: value }));
-  }
-
-  function handleSearch(e) {
-    e.preventDefault();
-    runFlightSearch(form);
   }
 
   // Straight to the table, the same shape a captured price already takes —
@@ -192,7 +182,7 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
             {existingStayGroups.map((g) => <option key={g} value={g} />)}
           </datalist>
           <p className="text-xs text-slate-500 mb-3">
-            Offers captured by the browser extension or fetched from the backend land here first. Nothing reaches
+            Offers captured by the browser extension, or recorded by Claude, land here first. Nothing reaches
             your table until you add it, so a bad scrape can never rewrite a plan you are working on.
           </p>
 
@@ -449,33 +439,7 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
             link kept in its detail so it's never lost.
           </p>
 
-          {/* Backend flight search */}
-          <form onSubmit={handleSearch} className="flex flex-wrap items-end gap-2 mb-3">
-            {[
-              { field: 'from', label: 'From', placeholder: 'IST', size: 'w-20' },
-              { field: 'to', label: 'To', placeholder: 'MUC', size: 'w-20' },
-              { field: 'date', label: 'Date', placeholder: 'YYYY-MM-DD', size: 'w-36', type: 'date' },
-              { field: 'adults', label: 'Adults', placeholder: '1', size: 'w-16' },
-              { field: 'window', label: 'Window tag', placeholder: '14-19 Aug', size: 'w-28' },
-            ].map((f) => (
-              <label key={f.field} className="text-[0.65rem] uppercase tracking-wide text-slate-500">
-                <span className="block mb-1">{f.label}</span>
-                <input
-                  type={f.type || 'text'}
-                  value={form[f.field]}
-                  onChange={(e) => setField(f.field, e.target.value)}
-                  placeholder={f.placeholder}
-                  className={`${f.size} font-mono text-xs px-2 py-1.5 rounded border border-slate-300 focus:border-blue-400 focus:outline-none normal-case`}
-                />
-              </label>
-            ))}
-            <button
-              type="submit"
-              disabled={search.busy || !form.from || !form.to || !form.date}
-              className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:bg-slate-300"
-            >
-              {search.busy ? 'Searching…' : 'Search flights'}
-            </button>
+          <div className="flex flex-wrap items-center gap-2 mb-3">
             <button
               type="button"
               onClick={refreshFromExtension}
@@ -483,31 +447,14 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
             >
               Pull from extension
             </button>
-          </form>
-
-          {search.error && <p className="text-xs text-red-600 mb-2">{search.error}</p>}
-          {search.providerError && (
-            <p className="text-xs text-amber-700 mb-2">
-              The flight API failed ({search.providerError}) — results below are from captured portal data only.
-            </p>
-          )}
-          {search.sources && search.sources.length > 0 && (
-            <p className="text-xs text-slate-500 mb-2">
-              Answered by {search.sources.join(', ')}
-              {search.ingestedCount ? ` · ${search.ingestedCount} from captured bank-portal data` : ''}.
-            </p>
-          )}
-          {search.live === false && (
-            <p className="text-xs text-amber-700 mb-2">
-              Backend answered with sample data — set AMADEUS_CLIENT_ID and AMADEUS_CLIENT_SECRET for live prices.
-            </p>
-          )}
+            <span className="text-xs text-slate-500">{extension.connected ? 'Chrome extension connected.' : 'Chrome extension not detected.'}</span>
+          </div>
 
           {/* Staged offers */}
           {offers.length === 0 ? (
             <p className="text-xs text-slate-500 italic">
               Nothing captured yet. Install the extension from <code className="bg-slate-100 rounded px-1">extension/</code>, then
-              browse a flight or hotel search — or run a backend search above. On iPhone, the extension
+              browse a flight or hotel search — or ask Claude to search. On iPhone, the extension
               can't run at all (no browser there supports one) — share a screenshot with Claude above, or use Read screenshot.
             </p>
           ) : (

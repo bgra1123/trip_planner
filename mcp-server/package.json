@@ -1,8 +1,8 @@
 {
-  "name": "trip-planner-mcp",
-  "version": "1.0.0",
+  "name": "tripagent-mcp",
+  "version": "2.0.0",
   "private": true,
-  "description": "MCP connector that lets Claude record travel options into the trip planner.",
+  "description": "TripAgent: the one MCP server that lets Claude read and record trips shared with the trip planner.",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",

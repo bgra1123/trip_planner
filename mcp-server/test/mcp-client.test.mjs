@@ -41,38 +41,46 @@ function startWorker() {
 
 const proc = await startWorker();
 try {
-  const client = new Client({ name: 'trip-planner-interop-test', version: '1.0.0' });
+  const client = new Client({ name: 'tripagent-interop-test', version: '1.0.0' });
   await client.connect(new StreamableHTTPClientTransport(new URL(`${BASE}/mcp/${TOKEN}`)));
-  ok('the official MCP client connects and initializes', client.getServerVersion()?.name === 'trip-planner');
+  ok('the official MCP client connects and initializes', client.getServerVersion()?.name === 'tripagent');
   ok('server instructions reach the client', /screenshot/.test(client.getInstructions() || ''));
 
   const { tools } = await client.listTools();
-  ok('the client sees both tools', tools.map((t) => t.name).sort().join(',') === 'add_trip_options,list_pending_options');
+  ok('the client sees all eight tools', tools.length === 8 && tools.some((t) => t.name === 'update_trip_option'), tools.map((t) => t.name).join(','));
+  const T = (name, args) => client.callTool({ name, arguments: args }).then((r) => ({ ...r, text: r.content.map((c) => c.text).join('\n') }));
 
-  const added = await client.callTool({
-    name: 'add_trip_options',
-    arguments: {
-      source: 'Capital One Travel',
-      window: '21-24 Oct',
-      options: [
-        { kind: 'flight', from: 'NYC', to: 'PAR', departure: '18:30', arrival: '07:45', carrier: 'Air France', price: 612, currency: 'USD' },
-        { kind: 'hotel', place: 'Paris', name: 'Le Marais Boutique', price: 280, currency: 'USD', per_night: true, nights: 3 },
-      ],
-    },
+  const created = await T('create_trip', { title: 'Paris in October' });
+  const tripId = (created.text.match(/trip (t[\w-]+)/) || [])[1];
+  ok('create_trip works in the real runtime', !!tripId && !created.isError, created.text);
+
+  // KV list() is eventually consistent in production, but tripId is explicit here.
+  const added = await T('add_trip_options', {
+    tripId, source: 'Capital One Travel', window: '21-24 Oct',
+    options: [
+      { kind: 'flight', from: 'NYC', to: 'PAR', departure: '18:30', arrival: '07:45', carrier: 'Air France', price: 612, currency: 'USD' },
+      { kind: 'hotel', place: 'Paris', name: 'Le Marais Boutique', price: 280, currency: 'USD', per_night: true, nights: 3 },
+    ],
   });
-  const addedText = added.content.map((c) => c.text).join('\n');
-  ok('a tool call records options in the real runtime', /Recorded 2 options/.test(addedText) && !added.isError, addedText);
+  ok('a tool call records options in the real runtime', /Recorded 2 options/.test(added.text) && !added.isError, added.text);
 
-  const listed = await client.callTool({ name: 'list_pending_options', arguments: {} });
-  ok('recorded options persist in KV between calls', /2 options waiting/.test(listed.content[0].text), listed.content[0].text);
+  const listed = await T('list_pending_options', { tripId });
+  ok('recorded options persist in KV between calls', /2 options waiting/.test(listed.text), listed.text);
 
-  const pending = await (await fetch(`${BASE}/api/${TOKEN}/pending`, { headers: { Origin: 'http://localhost:3000' } })).json();
-  ok('the planner API sees what Claude recorded', pending.offers.length === 2 && pending.offers.some((o) => o.carrier === 'Air France'));
+  const afId = (listed.text.match(/\[([^\]]+)\] flight/) || [])[1];
+  const upd = await T('update_trip_option', { tripId, optionId: afId, changes: { price: 640 } });
+  ok('a spoken correction updates the flight', !upd.isError && /640/.test(upd.text), upd.text);
 
-  const ack = await (await fetch(`${BASE}/api/${TOKEN}/ack`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:3000' },
-    body: JSON.stringify({ ids: pending.offers.map((o) => o.id) }),
-  })).json();
+  const H = { 'Content-Type': 'application/json', Origin: 'http://localhost:3000' };
+  const pending = await (await fetch(`${BASE}/api/${TOKEN}/trips/${tripId}/pending`, { headers: H })).json();
+  ok('the planner API sees the corrected option', pending.offers.length === 2 && pending.offers.some((o) => o.carrier === 'Air France' && o.price.low === 640));
+
+  const put = await fetch(`${BASE}/api/${TOKEN}/trips/${tripId}`, { method: 'PUT', headers: H, body: JSON.stringify({ title: 'Paris in October', snapshot: { rows: [], notes: [], rateRows: [] } }) });
+  ok('the planner can sync the trip', put.status === 200);
+  const trips = (await (await fetch(`${BASE}/api/${TOKEN}/trips`, { headers: H })).json()).trips;
+  ok('list_trips over KV list() sees the trip', trips.some((t) => t.id === tripId) && /Paris in October/.test((await T('list_trips', {})).text));
+
+  const ack = await (await fetch(`${BASE}/api/${TOKEN}/trips/${tripId}/ack`, { method: 'POST', headers: H, body: JSON.stringify({ ids: pending.offers.map((o) => o.id) }) })).json();
   ok('acknowledged options are cleared', ack.remaining === 0, JSON.stringify(ack));
 
   const wrong = await fetch(`${BASE}/mcp/not-the-token-0123456789`, { method: 'POST', body: '{}' });

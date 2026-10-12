@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test": "node test/worker.test.mjs && node test/mcp-client.test.mjs"
+    "test": "node test/worker.test.mjs && node test/mcp-client.test.mjs && node test/extension-background.test.mjs"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",

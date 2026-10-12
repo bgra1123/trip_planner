@@ -74,6 +74,11 @@ try {
   // The planner connects: it adopts Rome and pushes its own trip.
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
+  // Record what the planner tells the browser extension (nothing is installed here).
+  await page.addInitScript(() => {
+    window.__announced = [];
+    window.addEventListener('message', (e) => { if (e.data && e.data.source === 'tripagent-page' && e.data.type === 'CONNECTOR') window.__announced.push(e.data.url); });
+  });
   const dialogs = [];
   page.on('dialog', (d) => { const next = dialogs.shift(); if (next === undefined) d.accept(); else d.accept(next); });
   await page.goto(PLANNER, { waitUntil: 'networkidle' });
@@ -85,35 +90,42 @@ try {
 
   record('the trip Claude made appears in the planner', await until(async () => (await titles()).includes('Rome in May')), (await titles()).join(', '));
   record('the planner\'s own trip is saved to the server', await until(async () => (await api('/trips')).trips.some((t) => t.title === 'My trip')));
+  record('the planner tells the browser extension where TripAgent is', await until(async () => (await page.evaluate(() => window.__announced)).includes(CONNECTOR_URL)));
+  record('the planner reports its open trip to the server', await until(async () => !!(await api('/active')).tripId));
   record('Claude now sees both trips', await until(async () => /Rome in May/.test(await say('list_trips', {})) && /My trip/.test(await say('list_trips', {}))));
   const ambiguous = await claude.callTool({ name: 'list_pending_options', arguments: {} });
   record('with two trips Claude is told to ask which', ambiguous.isError && /ask which one/.test(ambiguous.content[0].text));
 
   // Open Rome: Claude's options are staged (and only staged).
   await select.selectOption({ label: 'Rome in May' });
+  record('switching trips moves the server\'s open trip', await until(async () => (await api('/active')).tripId === romeId));
+  // A capture tool (the extension) posting to "active" now lands in Rome.
+  const viaExt = await api('/trips/active/offers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ offers: [{ kind: 'flight', from: 'ROM', to: 'NYC', departure: '09:00', arrival: '13:00', carrier: 'ITA', price: { low: 450, high: 450, currency: 'USD' }, source: 'extension' }] }) });
+  record('an extension capture lands in the open trip', viaExt.tripId === romeId && viaExt.recorded === 1, JSON.stringify(viaExt));
   await page.getByRole('button', { name: /TripAgent capture/i }).click();
-  await page.getByText(/3 options from Claude waiting/).waitFor({ timeout: 10_000 }).catch(() => {});
+  await page.getByRole('button', { name: 'Check now' }).click();
+  await page.getByText(/4 options from Claude waiting/).waitFor({ timeout: 10_000 }).catch(() => {});
   let body = await page.locator('body').innerText();
-  record('opening the trip stages Claude\'s three options', /3 options from Claude waiting/.test(body) && /Add all 3 to table/.test(body));
+  record('opening the trip stages Claude\'s three options and the extension\'s one', /4 options from Claude waiting/.test(body) && /Add all 4 to table/.test(body));
   record('the staged flight shows its dollar price', /\$612/.test(body) && /\$548/.test(body));
-  record('staging does not consume them on the server', (await api(`/trips/${romeId}/pending`)).offers.length === 3);
+  record('staging does not consume them on the server', (await api(`/trips/${romeId}/pending`)).offers.length === 4);
 
   // A spoken correction: Claude changes the price and drops the hotel.
   const list = await say('list_pending_options', { tripId: romeId });
-  const itaId = (list.match(/\[([^\]]+)\] flight[^\n]*ITA/) || [])[1];
+  const itaId = (list.match(/\[([^\]]+)\] flight: NYC → ROM[^\n]*ITA/) || [])[1];
   const hotelId = (list.match(/\[([^\]]+)\] hotel/) || [])[1];
   await say('update_trip_option', { tripId: romeId, optionId: itaId, changes: { price: 640 } });
   await say('remove_trip_option', { tripId: romeId, optionId: hotelId });
   await page.getByRole('button', { name: 'Check now' }).click();
   record('a correction replaces the old option in staging', await until(async () => { const t = await page.locator('body').innerText(); return /\$640/.test(t) && !/\$612/.test(t); }));
   body = await page.locator('body').innerText();
-  record('a removed option leaves staging', !/Hotel Tiber/.test(body) && /2 options from Claude waiting/.test(body));
+  record('a removed option leaves staging', !/Hotel Tiber/.test(body) && /3 options from Claude waiting/.test(body));
 
   // Add one, dismiss one: both are forgotten on the server.
   const staged = page.locator('table').filter({ has: page.locator('th', { hasText: 'Source' }) });
   await staged.locator('tbody tr', { hasText: '$640' }).getByRole('button', { name: 'Add' }).click();
   await staged.locator('tbody tr', { hasText: '$548' }).getByRole('button', { name: 'Dismiss offer' }).click();
-  record('added and dismissed options are cleared on the server', await until(async () => (await api(`/trips/${romeId}/pending`)).offers.length === 0));
+  record('added and dismissed options are cleared on the server (the untouched one stays)', await until(async () => (await api(`/trips/${romeId}/pending`)).offers.length === 1));
 
   // The plan Claude can now read comes from what the user added.
   record('the added flight reaches the synced plan Claude reads', await until(async () => /ITA/.test(await say('get_trip_path', { tripId: romeId })) || /640/.test(await say('get_trip_path', { tripId: romeId }))), await say('get_trip_path', { tripId: romeId }));

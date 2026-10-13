@@ -169,6 +169,39 @@ record('a captured lira fare keeps its currency', /\u20ba38000|₺38000/.test(no
   await shotPage.close();
 }
 
+// The free path: page text pasted into the planner and read locally.
+{
+  const pastePage = await browser.newPage();
+  const apiCalls = [];
+  await pastePage.route('https://api.anthropic.com/**', (route) => { apiCalls.push(route.request().url()); route.abort(); });
+  await pastePage.goto(BASE, { waitUntil: 'networkidle', timeout: 20_000 });
+  await pastePage.getByRole('button', { name: /TripAgent capture/i }).click();
+  const pasted = ['$938', 'Delta', 'Delta', 'EWR - CDG', 'Delta Main Basic', 'Nonstop', 'Earn 5X miles on flights', '', 'Best Price',
+    '12:25 AM', '28h', '9:25 AM', '$735', 'TAP', 'TAP', 'EWR - ORY', 'Discount', '1 stop', 'Earn 5X miles on flights', '',
+    '5:30 PM', '7h 15m', '5:45 AM', '$962', 'Delta', 'Delta', 'JFK - CDG', 'Delta Main Basic', 'Nonstop', 'Earn 5X miles on flights', '',
+    '7:30 PM', '7h 25m', '7:55 AM', '$962', 'Delta', 'Delta', 'JFK - CDG', 'Delta Main Basic', 'Nonstop'].join('\n');
+  await pastePage.getByLabel('Pasted results text').fill(pasted);
+  const readPaste = pastePage.getByRole('button', { name: 'Read pasted text' });
+  record('pasted text is not read until the user says what the prices cover', await readPaste.isDisabled());
+  await pastePage.getByLabel('What the prices in the screenshot cover').selectOption('per_traveler');
+  await pastePage.getByLabel('How many travelers').fill('2');
+  record('answered: reading is enabled', await readPaste.isEnabled());
+  await readPaste.click();
+  await pastePage.getByText(/Read 3 flights/).waitFor({ timeout: 5000 }).catch(() => {});
+  const pbody = await pastePage.locator('body').innerText();
+  record('three flights read, the cut-off one skipped and reported', /Read 3 flights from the pasted text; skipped 1 cut-off result/.test(pbody), (pbody.match(/Read .*/) || ['(no message)'])[0]);
+  record('per traveler x 2 is applied to the shown prices', /\$1,?470/.test(pbody) && /\$1,?924/.test(pbody), (pbody.match(/\$\d[\d,]*/g) || []).join(' '));
+  record('every result is one NYC → PAR leg', (pbody.match(/NYC → PAR/g) || []).length >= 3);
+  record('the review list shows fare, airports and how it was totalled', /fare: Discount/.test(pbody) && /airports: EWR → ORY/.test(pbody) && /USD 735 per traveler × 2/.test(pbody), (pbody.match(/[^\n]*fare: Discount[^\n]*/) || ['(no detail line)'])[0]);
+  record('the page\'s own dates are not invented when none were pasted', !/window "/.test(pbody));
+  record('no AI request was made', apiCalls.length === 0, apiCalls.join(','));
+  await pastePage.getByLabel('Pasted results text').fill('hello world, nothing here');
+  await readPaste.click();
+  await pastePage.getByText(/Couldn't find flight results/).waitFor({ timeout: 3000 }).catch(() => {});
+  record('text with no flight results is refused with a way forward', /Couldn't find flight results/.test(await pastePage.locator('body').innerText()));
+  await pastePage.close();
+}
+
 // Envelopes that fail any part of the contract must be dropped silently.
 await page.evaluate(() => {
   const origin = window.location.origin;

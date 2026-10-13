@@ -146,6 +146,7 @@ one covers every site, which is exactly why there are several.
 | **Automatic scraping** (`extension/`) | Google Flights, Kayak, Skyscanner, Booking.com, Trainline, DB | none | a site redesigns |
 | **Bank travel portals** (`extension/`) | Capital One, Amex — in your logged-in session | none | a portal redesigns |
 | **TripAgent connector** (`mcp-server/`) | a screenshot or spoken details shared with Claude in the Claude app, any device | attach it or speak, say which trip | one-time Cloudflare deploy — see [docs/CLAUDE-CONNECTOR.md](docs/CLAUDE-CONNECTOR.md) |
+| **Paste results** (TripAgent panel) | the copied text of a Capital One / Amex style flight-results page, any device | select all, copy, paste, say per traveler or total | free (no AI); only reads the portal layouts it knows, and says what it skipped |
 | **Read screenshot** (TripAgent panel) | a screenshot of any page — including a card portal only you can see — on any device, iPhone included | pick the image, tap Read | needs your own Anthropic API key (well under a cent per screenshot, using Claude Haiku) |
 | **Screenshot transcription CLI** (`scripts/extract-screenshot.mjs`) | the same, from the command line | run the CLI | needs `ANTHROPIC_API_KEY` |
 

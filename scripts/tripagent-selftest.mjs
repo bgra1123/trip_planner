@@ -23,6 +23,7 @@ import {
   loadStore, saveStore, STORE_KEY, LEGACY_KEY, emptySnapshot, makeTrip, setSnapshot, renameTrip, addTrip, selectTrip,
   removeTrip, forgetDeleted, adoptRemoteTrip, replaceFromRemote, markSynced, isDirty,
 } from '../src/utils/tripStore.js';
+import { parsePortalText, METRO as PASTE_METRO, metroOf as pasteMetroOf } from '../src/utils/pasteResults.js';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -719,6 +720,10 @@ for (const blocked of ['chrome://settings', 'about:blank', 'devtools://devtools/
   const normalized = normalizeOffers(got, {});
   check('they normalize to one route group with dollar prices', [new Set(normalized.map((o) => o.group)).size, normalized[0].price.currency], [1, 'USD']);
 
+  const longCard = [{ innerText: '12:25 AM\n28h\n9:25 AM\n$735\nTAP\nTAP\nEWR - ORY\nDiscount\n1 stop\nEarn 5X miles on flights', textContent: '' }];
+  const gotLong = scrapers.scrape({ querySelectorAll: (sel) => (sel === 'li' ? longCard : []) }, 'https://travel.capitalone.com/flights/shop/', null);
+  ok('a 28-hour journey is flagged as arriving a day or more later (clocks alone can\'t say)', gotLong.length === 1 && /long journey \(28h\)/.test(gotLong[0].detail) && !/arrives next day/.test(gotLong[0].detail) && gotLong[0].stops === 1 && gotLong[0].carrier === 'TAP', JSON.stringify(gotLong));
+
   // The same cards if only textContent exists and elements ran together.
   const glued = cards.map((t) => ({ textContent: t.replace(/\n/g, ' ') }));
   const gotGlued = scrapers.scrape({ querySelectorAll: (sel) => (sel === 'li' ? glued : []) }, 'https://travel.capitalone.com/flights/shop/', null);
@@ -761,6 +766,100 @@ for (const blocked of ['chrome://settings', 'about:blank', 'devtools://devtools/
   check('one traveler changes nothing', totalForTravelers(offers, 1), offers);
   check('no count changes nothing', totalForTravelers(offers, ''), offers);
   check('the original offers are not mutated', offers[0].price.low, 1062);
+}
+
+// ---- pasted portal text (no AI) --------------------------------------------
+{
+  // Exactly as copied from the page: the first result is cut off at the top.
+  const pasted = `$938
+Delta
+Delta
+EWR - CDG
+Delta Main Basic
+Nonstop
+Earn 5X miles on flights
+
+
+Best Price
+12:25 AM
+28h
+9:25 AM
+$735
+TAP
+TAP
+EWR - ORY
+Discount
+1 stop
+Earn 5X miles on flights
+
+5:30 PM
+7h 15m
+5:45 AM
+$962
+Delta
+Delta
+JFK - CDG
+Delta Main Basic
+Nonstop
+Earn 5X miles on flights
+
+7:30 PM
+7h 25m
+7:55 AM
+$962
+Delta
+Delta
+JFK - CDG
+Delta Main Basic
+Nonstop`;
+  const r = parsePortalText(pasted);
+  check('three complete results are read', r.found, 3);
+  check('the result cut off at the top is skipped and counted, not guessed', r.skipped, 1);
+  const [tap, d1, d2] = r.offers;
+  check('the one-stop TAP result', [tap.carrier, tap.price, tap.stops, tap.duration, tap.departure, tap.arrival], ['TAP', '$735', 1, '28h', '12:25 AM', '9:25 AM']);
+  ok('its airports are kept and the long journey is flagged', /airports: EWR → ORY/.test(tap.detail) && /fare: Discount/.test(tap.detail) && /long journey \(28h\)/.test(tap.detail), tap.detail);
+  check('a Delta nonstop', [d1.carrier, d1.price, d1.stops, d1.from, d1.to], ['Delta', '$962', 0, 'NYC', 'PAR']);
+  ok('the airline printed twice is read once; fare name kept', /fare: Delta Main Basic/.test(d1.detail) && d1.carrier === 'Delta', d1.detail);
+  ok('an overnight arrival is flagged', /arrives next day/.test(d1.detail) && /arrives next day/.test(d2.detail));
+  ok('"Best Price" and "Earn 5X miles" never become data', r.offers.every((o) => !/Best|Earn/.test(o.carrier + o.detail)));
+  const staged = normalizeOffers(r.offers, { source: 'pasted' });
+  check('all three become alternatives for one NYC → PAR leg, in dollars', [new Set(staged.map((o) => o.group)).size, staged[0].group, staged[0].price.currency], [1, 'NYC → PAR', 'USD']);
+  check('the prices are exactly as shown (no per-traveler guess)', staged.map((o) => o.price.low), [735, 962, 962]);
+
+  // The earlier desktop paste: the last result is cut off after its price.
+  const earlier = `5:30 PM\n7h 15m\n5:45 AM\n$1,062\nDelta\nDelta\nJFK - CDG\nDelta Main Basic\nNonstop\nEarn 5X miles on flights\n\n6:30 PM\n7h 15m\n6:45 AM\n$1,062\nDelta\nDelta\nJFK - CDG\nDelta Main Basic\nNonstop\nEarn 5X miles on flights\n\n2:00 AM\n7h 5m\n2:05 PM\n$1,062\nAir France\nAir France\nJFK - CDG\nLight\nNonstop\nEarn 5X miles on flights\n\n10:30 PM\n7h 20m\n10:50 AM\n$1,062`;
+  const e = parsePortalText(earlier);
+  check('desktop paste: three read, the cut-off fourth skipped', [e.found, e.skipped], [3, 1]);
+  check('…with the right airlines and fares', e.offers.map((o) => o.carrier), ['Delta', 'Delta', 'Air France']);
+
+  // The phone layout, pasted as flat text (price + perk first, route last).
+  const phone = ['Book a flight', 'Done', 'New York City, New York (3 Airpor…', 'Oct 28 - Oct 31', 'All', 'Basic', 'Standard', 'Enhanced', 'Prem',
+    'Earn 5X miles on flights', '$759', 'Best Price, Best Overall', '11:00 PM', '7h 10m', '11:10 AM', 'French bee', 'Bee Light', 'Nonstop', 'EWR - ORY',
+    'Earn 5X miles on flights', '$1,062', 'Fastest, Best Quality', '6:05 PM', '7h 5m', '6:10 AM', 'Delta', 'Delta Main Basic', 'Nonstop', 'EWR - CDG',
+    'Earn 5X miles on flights', '$809', '11:00 PM', '7h 10m', '11:10 AM', 'Air Caraïbes', 'Eco Basic', 'Nonstop', 'EWR - ORY',
+    'Earn 5X miles on flights', 'Sort & filter'].join('\n');
+  const p = parsePortalText(phone);
+  check('phone layout: three results, nothing skipped', [p.found, p.skipped], [3, 0]);
+  check('phone layout: each price goes with ITS flight', p.offers.map((o) => [o.carrier, o.price]), [['French bee', '$759'], ['Delta', '$1,062'], ['Air Caraïbes', '$809']]);
+  check('phone layout: fares and legs', p.offers.map((o) => [/fare: ([^·]+)/.exec(o.detail)[1].trim(), `${o.from} → ${o.to}`]), [['Bee Light', 'NYC → PAR'], ['Delta Main Basic', 'NYC → PAR'], ['Eco Basic', 'NYC → PAR']]);
+  check('the trip dates above the results are offered as a window hint', p.windowHint, 'Oct 28 - Oct 31');
+
+  // Not flight results: nothing is invented.
+  check('unrelated text yields nothing', parsePortalText('Hello\nThis is a hotel page\n$200 per night').found, 0);
+  check('empty input yields nothing', parsePortalText('').found, 0);
+  const noRoute = parsePortalText('5:30 PM\n7h 15m\n5:45 AM\n$962\nDelta\nNonstop');
+  check('a result with no airports is skipped, not given a made-up route', [noRoute.found, noRoute.skipped], [0, 1]);
+  const points = parsePortalText('5:30 PM\n7h 15m\n5:45 AM\n32,000 miles\nDelta\nJFK - CDG\nMain\nNonstop');
+  ok('a points-only fare has no cash price and says so', points.found === 1 && points.offers[0].price === null && /points/.test(points.offers[0].detail), JSON.stringify(points.offers));
+  const plus = parsePortalText('10:30 PM\n9h 5m\n12:35 PM +1\n$800\nLufthansa\nJFK - FRA\nLight\nNonstop');
+  ok('an explicit "+1" arrival is honoured', /arrives \+1 day/.test(plus.offers[0].detail) && plus.offers[0].arrival === '12:35 PM', JSON.stringify(plus.offers));
+
+  // The extension and this reader must agree on which airports are one city.
+  const extSource = readFileSync(new URL('../extension/scrapers.js', import.meta.url), 'utf8');
+  const metroBlock = extSource.slice(extSource.indexOf('var METRO = {'), extSource.indexOf('function metroOf'));
+  check('the extension and the planner list the same number of airports', (metroBlock.match(/[A-Z]{3}: '[A-Z]{3}'/g) || []).length, Object.keys(PASTE_METRO).length);
+  ok('…and map every one to the same city', Object.keys(PASTE_METRO).every((code) => scrapers.metroOf(code) === PASTE_METRO[code]));
+  check('an unlisted airport keeps its own code', [pasteMetroOf('MUC'), scrapers.metroOf('MUC')], ['MUC', 'MUC']);
 }
 
 // ---- source links and price age ------------------------------------------

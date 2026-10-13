@@ -121,6 +121,16 @@ export default function useTripAgent() {
     return incoming.length;
   }, []);
 
+  // Offers read from pasted page text (see utils/pasteResults.js). Prices are as
+  // shown; the caller passes `travelers` only when the user said per traveler.
+  // Returns how many were staged.
+  const stageRawOffers = useCallback((raw, source, window, travelers) => {
+    let incoming = normalizeOffers(raw, { source: source || 'pasted', window: window || '' });
+    if (travelers) incoming = totalForTravelers(incoming, travelers);
+    if (incoming.length) setOffers((prev) => mergeOffers(prev, incoming));
+    return incoming.length;
+  }, []);
+
   // Hand back rows for the given offer ids and drop them from staging, so
   // an offer cannot be added to the table twice by a double click. Rows are
   // built from the rendered `offers` (not inside the state updater, which
@@ -142,7 +152,7 @@ export default function useTripAgent() {
   }, [offers, forgetOnConnector]);
 
   return {
-    offers, capturedRates, extension, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor, stageNotes,
+    offers, capturedRates, extension, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor, stageNotes, stageRawOffers,
     connectorUrl, setConnectorUrl, connector, pullFromClaude,
   };
 }

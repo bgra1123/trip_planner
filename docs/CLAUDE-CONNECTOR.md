@@ -100,6 +100,12 @@ review list and de-duplicate against each other.
 when you're logged in, so Claude can't look them up for you. Three ways in, best
 first:
 
+0. **Paste it into the planner (free).** Select all on the results page, copy,
+   and paste into the planner's **Paste the results page's text** box. It reads
+   the flights right there with no AI: no tokens, no API key, nothing to pay.
+   Answer "per traveler or total?" first, as with every route. It tells you how
+   many results it read and how many were cut off and skipped. If it can't read
+   the text it says so, and you can use any route below.
 1. **Copy the page text.** On the results page, select all, copy, and paste it
    into the Claude chat with *"add these to my Paris trip"*. Text is more
    reliable than a picture, works on iPhone, and Claude ignores the menus and

@@ -407,7 +407,10 @@ var TripAgentScrapers = (function () {
       // (local times, and no flight is over 24 hours here).
       var dep = clockMinutes(times[0]);
       var arr = clockMinutes(times[1]);
-      if (dep !== null && arr !== null && arr < dep) detail.push('arrives next day');
+      var hoursMatch = durationMatch && /(\d{1,2})\s?h/i.exec(durationMatch[0]);
+      var hours = hoursMatch ? parseInt(hoursMatch[1], 10) : 0;
+      if (hours >= 24) detail.push('long journey (' + hours + 'h): arrives a day or more later');
+      else if (dep !== null && arr !== null && arr < dep) detail.push('arrives next day');
 
       offers.push({
         kind: 'flight',

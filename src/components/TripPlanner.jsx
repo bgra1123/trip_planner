@@ -334,7 +334,7 @@ function TripWorkspace({ initial, onSnapshot }) {
           <span className="text-xs text-slate-500">Fix a transcription mistake, add options, or set exchange rates.</span>
         </div>
 
-        {/* TripBuddy capture (extension + Claude) — outside the edit panel
+        {/* TripAgent capture (extension + Claude) — outside the edit panel
             on purpose: an offer can arrive while the data-entry tools are
             collapsed, and its "N waiting" badge has to stay visible. */}
         <TripAgentPanel onAddRows={appendRows} rates={rates} existingStayGroups={parsed.stay.map((g) => g.key)} existingLegs={parsed.travel.map((g) => g.key)} />
@@ -876,7 +876,7 @@ function TripWorkspace({ initial, onSnapshot }) {
 }
 
 // The trips: which one is open, saved in this browser, and shared with Claude
-// through the TripBuddy server when a connector is set.
+// through the TripAgent server when a connector is set.
 export default function TripPlanner() {
   const [store, setStore] = useState(() => {
     try { return loadStore(window.localStorage); } catch { return loadStore({ getItem: () => null }); }

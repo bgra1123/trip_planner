@@ -1,5 +1,5 @@
-// Collects offers from the TripBuddy sources — the Chrome extension
-// (push, via window.postMessage) and Claude through the TripBuddy server
+// Collects offers from the TripAgent sources — the Chrome extension
+// (push, via window.postMessage) and Claude through the TripAgent server
 // (pull, via fetch) — into one staging list.
 //
 // Staging is deliberate: captured offers do NOT go straight into the

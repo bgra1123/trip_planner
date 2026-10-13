@@ -1,6 +1,6 @@
 import React from 'react';
 
-// Which trip is open, plus new / rename / delete. When TripBuddy is
+// Which trip is open, plus new / rename / delete. When TripAgent is
 // connected it also shows whether the trips are in step with the server.
 export default function TripBar({ trips, activeId, connected, sync, onSelect, onNew, onRename, onDelete, onSync }) {
   const active = trips.find((t) => t.id === activeId);
@@ -17,7 +17,7 @@ export default function TripBar({ trips, activeId, connected, sync, onSelect, on
   }
   function handleDelete() {
     const warning = connected
-      ? 'Delete this trip here and on TripBuddy, so Claude no longer sees it? This cannot be undone.'
+      ? 'Delete this trip here and on TripAgent, so Claude no longer sees it? This cannot be undone.'
       : 'Delete this trip? This cannot be undone.';
     if (window.confirm(`${warning}\n\n${active ? active.title : ''}`)) onDelete();
   }
@@ -44,7 +44,7 @@ export default function TripBar({ trips, activeId, connected, sync, onSelect, on
           <span className="text-xs text-slate-500 flex items-center gap-2">
             {sync.error
               ? <span className="text-red-600">{sync.error}</span>
-              : <span>{sync.busy ? 'Syncing with TripBuddy…' : sync.lastSyncedAt ? 'Shared with Claude' : 'Connected to TripBuddy'}</span>}
+              : <span>{sync.busy ? 'Syncing with TripAgent…' : sync.lastSyncedAt ? 'Shared with Claude' : 'Connected to TripAgent'}</span>}
             <button type="button" onClick={onSync} disabled={sync.busy} className="text-blue-600 underline disabled:text-slate-300">Sync now</button>
           </span>
         )}

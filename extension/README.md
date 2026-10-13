@@ -1,4 +1,4 @@
-# TripBuddy Capture (browser extension)
+# TripAgent Capture (browser extension)
 
 Gets prices out of a browser tab and into your trip plan. **It works on
 whatever page you have open** — there is no list of supported sites you have to
@@ -31,19 +31,19 @@ pick `manifest.json` (temporary add-ons are removed when Firefox restarts).
 
 The toolbar badge shows how many items are waiting across both queues.
 
-## Where captures go: TripBuddy
+## Where captures go: TripAgent
 
-If you use the TripBuddy server ([docs/CLAUDE-CONNECTOR.md](../docs/CLAUDE-CONNECTOR.md)),
+If you use the TripAgent server ([docs/CLAUDE-CONNECTOR.md](../docs/CLAUDE-CONNECTOR.md)),
 the extension posts every capture to it, into whichever trip is open in your
 planner. They wait in the planner's review list until you tap Add, on any device,
 whether or not a planner tab is open, and Claude can see them.
 
-Setup is automatic: connect the planner to TripBuddy and it tells the extension
-the URL. Or paste it in the popup's **TripBuddy** section. A URL you saved in the
+Setup is automatic: connect the planner to TripAgent and it tells the extension
+the URL. Or paste it in the popup's **TripAgent** section. A URL you saved in the
 popup is never replaced by a page. For a custom domain (not `*.workers.dev`),
 Chrome asks you once to allow the extension to reach it.
 
-With no TripBuddy URL, or if it can't be reached, captures are pushed into an
+With no TripAgent URL, or if it can't be reached, captures are pushed into an
 open planner tab, exactly as before, and the popup says why.
 
 ## Confirm prices
@@ -109,7 +109,7 @@ capture and a tuned adapter, not the ability to capture there at all.
 
 Bank travel portals require you to be logged in. The extension runs in your
 browser with your session, so authentication is simply yours — nothing about
-your credentials is read, stored or transmitted, and TripBuddy never sees
+your credentials is read, stored or transmitted, and TripAgent never sees
 them (it receives only the offers you capture).
 
 ### How scraping works
@@ -168,9 +168,9 @@ fallbacks still apply. Then add the URL pattern to
   one tab, and expires. The alternative — an `<all_urls>` content script —
   would mean running on every page you ever load.
 - Host permissions — the sites with automatic capture, the planner origins, and
-  `*.workers.dev` so captures can reach your TripBuddy server.
+  `*.workers.dev` so captures can reach your TripAgent server.
 
-Captured data goes to your TripBuddy server (if you set one up), an open planner
+Captured data goes to your TripAgent server (if you set one up), an open planner
 tab, or your clipboard, and nowhere else.
 The extension makes no network requests of its own.
 
@@ -185,7 +185,7 @@ ships through the App Store, not as an unpacked folder.
 Even with that conversion, right-click capture has no iOS equivalent — touch
 screens have no right-click, and there's no automatic capture-on-page-load.
 On iPhone, share a screenshot (or speak the details) with Claude through the
-TripBuddy connector, use the planner's **Read screenshot**, or type the price
+TripAgent connector, use the planner's **Read screenshot**, or type the price
 into **Quick Add**. All of them work on any device.
 
 ## Pointing at a different planner URL

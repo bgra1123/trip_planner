@@ -1,5 +1,5 @@
 /* global globalThis */
-// Site scrapers for TripBuddy Capture.
+// Site scrapers for TripAgent Capture.
 //
 // Booking sites rewrite their markup constantly, so nothing here depends on
 // a class name. Two strategies, tried in order:

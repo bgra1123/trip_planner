@@ -20,7 +20,7 @@ const OPTIONS_KEY = 'tripagent.options';
 const MAX_OFFERS = 200;
 const MENU_ID = 'trip-planner-capture';
 
-// ---- TripBuddy server -------------------------------------------------------
+// ---- TripAgent server -------------------------------------------------------
 // The one place trips live. Captures are posted to whichever trip is open in
 // the planner and wait there for the user's Add, so they show up on any
 // device and Claude can see them — and no planner tab needs to be open. If it
@@ -51,7 +51,7 @@ async function readConnector() {
 async function sendToServer(payload) {
   const url = await readConnector();
   const base = apiBaseOf(url);
-  if (!base) return { ok: false, notConfigured: true, error: 'TripBuddy is not set up in this extension.' };
+  if (!base) return { ok: false, notConfigured: true, error: 'TripAgent is not set up in this extension.' };
   let res;
   try {
     res = await fetch(base + '/trips/active/offers', {
@@ -60,13 +60,13 @@ async function sendToServer(payload) {
       body: JSON.stringify(payload),
     });
   } catch (err) {
-    return { ok: false, error: 'Could not reach TripBuddy.' };
+    return { ok: false, error: 'Could not reach TripAgent.' };
   }
   let body = null;
   try { body = await res.json(); } catch (err) { /* non-JSON error page */ }
   if (res.ok && body) return { ok: true, title: body.title, recorded: body.recorded };
-  if (res.status === 404) return { ok: false, error: 'TripBuddy did not recognize the saved URL.' };
-  return { ok: false, error: (body && body.message) || ('TripBuddy answered ' + res.status + '.') };
+  if (res.status === 404) return { ok: false, error: 'TripAgent did not recognize the saved URL.' };
+  return { ok: false, error: (body && body.message) || ('TripAgent answered ' + res.status + '.') };
 }
 
 const PLANNER_URLS = [
@@ -183,7 +183,7 @@ function heldSources(held) {
   return Object.keys(counts).map((source) => ({ source, count: counts[source] }));
 }
 
-// Deliver offers: TripBuddy first; an open planner tab only if that fails.
+// Deliver offers: TripAgent first; an open planner tab only if that fails.
 async function deliver(offers) {
   if (!offers.length) return { server: { ok: false, notConfigured: true }, delivered: 0 };
   const server = await sendToServer({ offers, source: 'extension' });
@@ -364,7 +364,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case 'SET_CONNECTOR': {
         const url = String(message.url || '').trim();
-        if (url && !apiBaseOf(url)) { sendResponse({ ok: false, error: 'That is not a TripBuddy URL \u2014 it should look like https://\u2026/mcp/<token>.' }); break; }
+        if (url && !apiBaseOf(url)) { sendResponse({ ok: false, error: 'That is not a TripAgent URL \u2014 it should look like https://\u2026/mcp/<token>.' }); break; }
         if (url) await chrome.storage.local.set({ [CONNECTOR_KEY]: url });
         else await chrome.storage.local.remove(CONNECTOR_KEY);
         sendResponse({ ok: true });
@@ -421,7 +421,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         const offers = (reply && reply.offers) || [];
         const result = await addOffers(offers);
-        // TripBuddy first (dedupes server-side, so everything found is sent);
+        // TripAgent first (dedupes server-side, so everything found is sent);
         // bank-portal flights wait until the user says what their prices cover.
         const { ready, held } = await applyPricing(offers);
         const sent = ready.length ? await deliver(ready) : { server: { ok: false, notConfigured: true }, delivered: 0 };

@@ -1,6 +1,6 @@
-# TripBuddy: one server for Claude and your planner
+# TripAgent: one server for Claude and your planner
 
-TripBuddy is the single MCP server that connects Claude to your trips. Claude
+TripAgent is the single MCP server that connects Claude to your trips. Claude
 (in the Claude app, on your phone or anywhere) and the planner both use it, so
 they share the same trips:
 
@@ -14,28 +14,26 @@ they share the same trips:
 - **Search public options.** *"Find flights from New York to Paris on Oct 21
   and add the good ones to my Paris trip."* Claude uses whatever travel search
   connectors you have in the Claude app (for example Expedia, Kiwi.com,
-  Booking.com, Tripadvisor), then records the results through TripBuddy for you
-  to review. TripBuddy doesn't search anything itself; it's where the results
+  Booking.com, Tripadvisor), then records the results through TripAgent for you
+  to review. TripAgent doesn't search anything itself; it's where the results
   are kept, compared and ranked.
 - **Ask about your trip.** *"What's my cheapest way to do this trip?"* Claude
   reads the planner's own plan and ranks the combinations the way the
   planner does.
 
-Everything Claude records waits in the planner's **TripBuddy capture** panel
+Everything Claude records waits in the planner's **TripAgent capture** panel
 until you tap **Add**. Claude never edits your plan. Trips themselves need no
 approval: Claude can start an empty trip when you ask, and it shows up in
 your planner.
 
 No Anthropic API key is involved; Claude reads the image or your voice as part
-of your normal Claude chat. TripBuddy is a small server on Cloudflare's free
+of your normal Claude chat. TripAgent is a small server on Cloudflare's free
 tier. It exists because the planner keeps your trip in your browser's own
 storage, which nothing outside that browser can reach.
 
-> **One TripBuddy only.** If you previously added an older trip connector to
-> Claude (one called "TripAgent", or the earlier `trip-planner-mcp`), remove it
-> (Claude → Settings → Connectors → that connector → Disconnect) and add this
-> one, **named TripBuddy** when Claude asks for a name. That name is what you say:
-> "use TripBuddy to plan my trip". Two trip connectors at once means Claude
+> **One TripAgent only.** If you previously added a different "TripAgent"
+> connector to Claude, remove it (Claude → Settings → Connectors → TripAgent →
+> Disconnect) and add this one. Two servers of the same name means Claude
 > sometimes talks to the one that isn't connected to your planner.
 
 ## One-time setup (about 15 minutes)
@@ -54,13 +52,13 @@ npx wrangler kv namespace create TRIPS   # prints an id: paste it into wrangler.
 node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"
 
 npx wrangler secret put TRIP_TOKEN       # paste the token when asked
-npx wrangler deploy                      # prints https://tripbuddy.<you>.workers.dev
+npx wrangler deploy                      # prints https://tripagent.<you>.workers.dev
 ```
 
 Your **connector URL** is the deployed address plus `/mcp/` plus your token:
 
 ```
-https://tripbuddy.<you>.workers.dev/mcp/<your-token>
+https://tripagent.<you>.workers.dev/mcp/<your-token>
 ```
 
 Use that same URL in two places:
@@ -70,17 +68,17 @@ Use that same URL in two places:
    available in the Claude app on your phone. (Menu names may shift as the
    product changes; custom connectors may also depend on your Claude plan.
    If you don't see the option, check Claude's help center.)
-2. **The planner**: open the **TripBuddy capture** panel, paste it into
-   **TripBuddy connector URL**, and tap **Connect**.
+2. **The planner**: open the **TripAgent capture** panel, paste it into
+   **TripAgent connector URL**, and tap **Connect**.
 
-Upgrading from an earlier version of this server (named `trip-planner-mcp` or
-`tripagent`)? `wrangler deploy` now publishes a worker named `tripbuddy`, so you
-get a new URL host. Reuse the same KV namespace id and token if you like, update both
+Upgrading from the earlier version of this server (named `trip-planner-mcp`)?
+`wrangler deploy` now publishes a worker named `tripagent`, so you get a new
+URL host. Reuse the same KV namespace id and token if you like, update both
 places above, and delete the old worker in the Cloudflare dashboard.
 
 ## Using it
 
-1. Connect the planner once (above). Your trips are saved to TripBuddy a moment
+1. Connect the planner once (above). Your trips are saved to TripAgent a moment
    after each change, and checked again whenever you come back to the planner.
 2. In the Claude app, share a screenshot or speak. Say which trip if you have
    more than one; Claude asks when it isn't clear.
@@ -89,16 +87,16 @@ places above, and delete the old worker in the Cloudflare dashboard.
    the review list; tap **Add** on the ones you want, or ✕ to drop them.
 
 **Capturing from Chrome.** The browser extension (`extension/`) sends what it
-captures straight to TripBuddy, into the trip that is open in your planner, so
+captures straight to TripAgent, into the trip that is open in your planner, so
 the planner tab doesn't need to be open at the time and the options show up on
 your phone as well. There's nothing to configure: when the planner is connected
-and the extension is installed, the planner tells the extension where TripBuddy
-is. (You can also paste the URL into the extension popup.) If TripBuddy isn't
+and the extension is installed, the planner tells the extension where TripAgent
+is. (You can also paste the URL into the extension popup.) If TripAgent isn't
 set up or can't be reached, the extension falls back to pushing into an open
 planner tab, as before. Captures from Chrome and from Claude land in the same
 review list and de-duplicate against each other.
 
-**Adding by card (no Claude needed).** The planner's **TripBuddy capture** panel
+**Adding by card (no Claude needed).** The planner's **TripAgent capture** panel
 opens on guided input cards: Flight, Train, Hotel, Activity. Fill a few clearly
 labelled fields, or use **Say it or type it in one go**: type or dictate a
 sentence ("flight from New York to Paris, leaves 6:30 pm, lands 7:45 am, Air
@@ -167,7 +165,7 @@ screenshot or the browser extension.
 
 **Several trips.** The bar at the top of the planner switches between trips and
 creates, renames and deletes them. Deleting a trip also deletes it from
-TripBuddy, so Claude no longer sees it.
+TripAgent, so Claude no longer sees it.
 
 **Tools Claude has:** `list_trips`, `create_trip`, `add_trip_options`,
 `update_trip_option`, `remove_trip_option`, `list_pending_options`,
@@ -190,7 +188,7 @@ table, tell Claude, since it works from the last sync.
 - **Rankings match the planner.** `optimize_trip` uses the planner's own cost
   and window rules, including leaving out currencies you haven't set a rate
   for. It never mixes options from different date windows.
-- **Nothing is lost on a reload.** Options stay on TripBuddy until you add or
+- **Nothing is lost on a reload.** Options stay on TripAgent until you add or
   dismiss them, so reloading just shows them again. A correction or removal by
   Claude replaces the old copy in your review list the next time the planner
   checks.
@@ -207,7 +205,7 @@ prices) and add options to your review lists. They can't touch the copy of your
 plan stored in your browser. Keep it private; to rotate it, run `npx wrangler
 secret put TRIP_TOKEN` with a new token and update both places.
 
-TripBuddy only accepts planner requests from the GitHub Pages site and
+TripAgent only accepts planner requests from the GitHub Pages site and
 localhost. If you host the planner elsewhere, set `ALLOWED_ORIGINS` in
 `wrangler.toml`.
 

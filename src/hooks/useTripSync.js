@@ -1,4 +1,4 @@
-// Keeps the planner's trips and the TripBuddy server's trips the same, so
+// Keeps the planner's trips and the TripAgent server's trips the same, so
 // Claude and the planner work on the same trips. Local-first: everything
 // works with no connector; with one, trips are saved to the server shortly
 // after each change, and checked against it on connect and whenever the
@@ -121,7 +121,7 @@ export default function useTripSync(store, setStore) {
     setActiveRemoteTrip(connectorUrl, activeId).catch(() => { /* best effort */ });
   }, [connectorUrl, activeId, activeSynced]);
 
-  // Tell the browser extension (if installed) where TripBuddy is, so it needs
+  // Tell the browser extension (if installed) where TripAgent is, so it needs
   // no setup of its own. It answers our READY with STATUS, which also covers
   // the extension loading after this page.
   useEffect(() => {

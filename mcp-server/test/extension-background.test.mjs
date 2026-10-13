@@ -1,5 +1,5 @@
 // The extension's service worker (extension/background.js) run in Node with a
-// stubbed `chrome` API, posting to the real TripBuddy worker in workerd.
+// stubbed `chrome` API, posting to the real TripAgent worker in workerd.
 // (Loading an unpacked extension into the sandbox's Chromium isn't possible, so
 // this exercises the logic; the popup wiring and a real install are checked by hand.)
 //
@@ -99,7 +99,7 @@ try {
     const { chrome, send } = loadBackground();
     record('GET_STATE reports no connector at first', (await send({ type: 'GET_STATE' })).connectorUrl === '');
     const bad = await send({ type: 'SET_CONNECTOR', url: 'https://example.com/not-a-connector' });
-    record('SET_CONNECTOR refuses a URL that is not a TripBuddy connector', bad.ok === false && /TripBuddy URL/.test(bad.error));
+    record('SET_CONNECTOR refuses a URL that is not a TripAgent connector', bad.ok === false && /TripAgent URL/.test(bad.error));
     record('SET_CONNECTOR refuses plain http to a real host', (await send({ type: 'SET_CONNECTOR', url: 'http://evil.example/mcp/abcdefghij' })).ok === false);
     record('SET_CONNECTOR accepts localhost for testing', (await send({ type: 'SET_CONNECTOR', url: CONNECTOR_URL })).ok === true);
     record('the URL is saved and reported', (await send({ type: 'GET_STATE' })).connectorUrl === CONNECTOR_URL);
@@ -120,7 +120,7 @@ try {
     await send({ type: 'SET_CONNECTOR', url: CONNECTOR_URL });
     await seed(chrome);
     const reply = await send({ type: 'SEND_OFFERS_TO_PLANNER' });
-    record('sending goes to TripBuddy, naming the trip', reply.ok && reply.server.ok && reply.server.title === 'Paris' && reply.server.recorded === 2, JSON.stringify(reply));
+    record('sending goes to TripAgent, naming the trip', reply.ok && reply.server.ok && reply.server.title === 'Paris' && reply.server.recorded === 2, JSON.stringify(reply));
     record('…and is not also pushed to the planner tab (no duplicates)', reply.delivered === 0 && pushed.length === 0);
     const waiting = await pending();
     record('the offers wait on the server in the open trip', waiting.length === 2 && waiting.some((o) => o.carrier === 'Air France' && o.price.low === 612 && o.price.currency === 'USD'));
@@ -134,7 +134,7 @@ try {
     const { send, pushed } = loadBackground();
     await send({ type: 'SET_CONNECTOR', url: CONNECTOR_URL });
     const reply = await send({ type: 'SEND_NOTES_TO_PLANNER', notes: 'Flight: IST → MUN, 06:45-09:10, €210' });
-    record('selected text goes to TripBuddy too', reply.server.ok && reply.delivered === 0 && pushed.length === 0, JSON.stringify(reply));
+    record('selected text goes to TripAgent too', reply.server.ok && reply.delivered === 0 && pushed.length === 0, JSON.stringify(reply));
     record('…and is parsed by the planner\'s grammar', (await pending()).some((o) => o.group === 'IST → MUN' && o.price.currency === 'EUR'));
   }
 
@@ -147,7 +147,7 @@ try {
     const auto = [{ kind: 'flight', from: 'LHR', to: 'JFK', departure: '09:00', arrival: '12:00', carrier: 'BA', price: { low: 410, high: 410, currency: 'GBP' }, source: 'kayak' }];
     const first = await send({ type: 'CAPTURED', offers: auto, site: 'kayak' });
     const waiting = (await api('/trips/tripAUTO001/pending')).offers;
-    record('an automatic capture goes to TripBuddy', first.ok && first.added === 1 && waiting.length === 1 && waiting[0].price.currency === 'GBP', JSON.stringify(waiting));
+    record('an automatic capture goes to TripAgent', first.ok && first.added === 1 && waiting.length === 1 && waiting[0].price.currency === 'GBP', JSON.stringify(waiting));
     record('…and is not also pushed to the planner tab', pushed.length === 0);
     await send({ type: 'CAPTURED', offers: auto, site: 'kayak' });
     record('the same page seen again is not re-posted or duplicated', (await api('/trips/tripAUTO001/pending')).offers.length === 1);
@@ -168,7 +168,7 @@ try {
     // 1. Nothing is assumed: no answer yet, nothing leaves the extension.
     const first = await send({ type: 'CAPTURED', offers: [flight('$1,062'), flight('$809', 'capital-one', '11:00 PM')], site: 'capital-one' });
     record('a Capital One capture is held, and the popup is told to ask', first.ok && first.held.length === 1 && first.held[0].source === 'capital-one' && first.held[0].count === 2, JSON.stringify(first.held));
-    record('…nothing reached TripBuddy', (await waiting()).length === 0);
+    record('…nothing reached TripAgent', (await waiting()).length === 0);
     record('…nor the planner tab', pushed.length === 0);
     const state = await send({ type: 'GET_STATE' });
     record('the popup state lists what is waiting for an answer', state.held.length === 1 && state.held[0].count === 2 && Object.keys(state.pricing).length === 0);
@@ -245,7 +245,7 @@ try {
 
     await send({ type: 'SET_CONNECTOR', url: 'http://127.0.0.1:9/mcp/dead-token-0123456789' });
     const dead = await send({ type: 'SEND_OFFERS_TO_PLANNER' });
-    record('an unreachable server is reported with a reason', dead.server.ok === false && /Could not reach TripBuddy/.test(dead.server.error));
+    record('an unreachable server is reported with a reason', dead.server.ok === false && /Could not reach TripAgent/.test(dead.server.error));
     record('…and the planner tab still gets the offers', dead.delivered === 1 && pushed.length === 2);
 
     await send({ type: 'SET_CONNECTOR', url: `${WORKER}/mcp/wrong-token-0123456789abc` });

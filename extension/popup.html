@@ -2,24 +2,24 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>TripBuddy Capture</title>
+  <title>TripAgent Capture</title>
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
   <header>
-    <h1>TripBuddy Capture</h1>
+    <h1>TripAgent Capture</h1>
     <p class="hint" id="subtitle">Works on whatever page you have open — right-click a price, or hit Capture below. Known travel sites are picked up automatically.</p>
   </header>
 
-  <!-- TripBuddy: where captures go. Set once; the planner fills it in if it is open. -->
+  <!-- TripAgent: where captures go. Set once; the planner fills it in if it is open. -->
   <section class="section" id="server-section">
-    <h2>TripBuddy</h2>
+    <h2>TripAgent</h2>
     <div id="server-on" hidden>
       <p class="hint" id="server-on-text">Captures go to the trip open in your planner.</p>
       <div class="btn-row"><button id="server-change-btn" class="btn -ghost">Change</button></div>
     </div>
     <div id="server-off">
-      <p class="hint">Paste your TripBuddy URL once and captures reach your planner from any device \u2014 no planner tab needed. Opening the planner with TripBuddy connected fills this in for you.</p>
+      <p class="hint">Paste your TripAgent URL once and captures reach your planner from any device \u2014 no planner tab needed. Opening the planner with TripAgent connected fills this in for you.</p>
       <div class="overrides"><label style="flex:1">URL <input id="server-url" placeholder="https://\u2026workers.dev/mcp/\u2026" style="width:100%" /></label></div>
       <div class="btn-row"><button id="server-save-btn" class="btn -primary">Save</button></div>
     </div>

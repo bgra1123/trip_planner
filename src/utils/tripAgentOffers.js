@@ -1,4 +1,4 @@
-// TripBuddy offer normalization.
+// TripAgent offer normalization.
 //
 // Everything that arrives from outside the app — the Chrome extension
 // scraping a booking site, or Claude recording a search result — is funnelled

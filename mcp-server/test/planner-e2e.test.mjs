@@ -82,7 +82,7 @@ try {
   const dialogs = [];
   page.on('dialog', (d) => { const next = dialogs.shift(); if (next === undefined) d.accept(); else d.accept(next); });
   await page.goto(PLANNER, { waitUntil: 'networkidle' });
-  await page.getByRole('button', { name: /TripBuddy capture/i }).click();
+  await page.getByRole('button', { name: /TripAgent capture/i }).click();
   await page.locator('input[placeholder^="https://…workers.dev"]').fill(CONNECTOR_URL);
   await page.getByRole('button', { name: 'Connect' }).click();
   const select = page.getByLabel('Trip', { exact: true });
@@ -90,7 +90,7 @@ try {
 
   record('the trip Claude made appears in the planner', await until(async () => (await titles()).includes('Rome in May')), (await titles()).join(', '));
   record('the planner\'s own trip is saved to the server', await until(async () => (await api('/trips')).trips.some((t) => t.title === 'My trip')));
-  record('the planner tells the browser extension where TripBuddy is', await until(async () => (await page.evaluate(() => window.__announced)).includes(CONNECTOR_URL)));
+  record('the planner tells the browser extension where TripAgent is', await until(async () => (await page.evaluate(() => window.__announced)).includes(CONNECTOR_URL)));
   record('the planner reports its open trip to the server', await until(async () => !!(await api('/active')).tripId));
   record('Claude now sees both trips', await until(async () => /Rome in May/.test(await say('list_trips', {})) && /My trip/.test(await say('list_trips', {}))));
   const ambiguous = await claude.callTool({ name: 'list_pending_options', arguments: {} });
@@ -102,7 +102,7 @@ try {
   // A capture tool (the extension) posting to "active" now lands in Rome.
   const viaExt = await api('/trips/active/offers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ offers: [{ kind: 'flight', from: 'ROM', to: 'NYC', departure: '09:00', arrival: '13:00', carrier: 'ITA', price: { low: 450, high: 450, currency: 'USD' }, source: 'extension' }] }) });
   record('an extension capture lands in the open trip', viaExt.tripId === romeId && viaExt.recorded === 1, JSON.stringify(viaExt));
-  await page.getByRole('button', { name: /TripBuddy capture/i }).click();
+  await page.getByRole('button', { name: /TripAgent capture/i }).click();
   await page.getByRole('button', { name: 'Check now' }).click();
   await page.getByText(/4 options from Claude waiting/).waitFor({ timeout: 10_000 }).catch(() => {});
   let body = await page.locator('body').innerText();
@@ -144,7 +144,7 @@ try {
   await page.reload({ waitUntil: 'networkidle' });
   const after = await titles();
   record('trips survive a reload', after.includes('Rome in May') && after.includes('My trip'), after.join(', '));
-  record('the connection is remembered across reloads', /Shared with Claude|Connected to TripBuddy|Syncing/.test(await page.locator('body').innerText()));
+  record('the connection is remembered across reloads', /Shared with Claude|Connected to TripAgent|Syncing/.test(await page.locator('body').innerText()));
 
   // A trip deleted by Claude-side API (another device) disappears here on sync.
   await api(`/trips/${romeId}`, { method: 'DELETE' });
@@ -152,7 +152,7 @@ try {
   record('a trip deleted elsewhere is dropped on sync', await until(async () => !(await titles()).includes('Rome in May')), (await titles()).join(', '));
 
   // Disconnect: the URL is forgotten and the planner still works locally.
-  if (!(await page.getByRole('button', { name: 'Disconnect' }).count())) await page.getByRole('button', { name: /TripBuddy capture/i }).click();
+  if (!(await page.getByRole('button', { name: 'Disconnect' }).count())) await page.getByRole('button', { name: /TripAgent capture/i }).click();
   await page.getByRole('button', { name: 'Disconnect' }).click();
   record('disconnect forgets the URL', await page.locator('input[placeholder^="https://…workers.dev"]').count() === 1);
   record('local trips remain after disconnecting', (await titles()).includes('My trip'));

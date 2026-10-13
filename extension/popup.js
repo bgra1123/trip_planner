@@ -229,7 +229,7 @@
     $('pricing-section').hidden = !list.children.length;
   }
 
-  // ---- TripBuddy ----------------------------------------------------------
+  // ---- TripAgent ----------------------------------------------------------
 
   function renderServer(url) {
     $('server-on').hidden = !url;
@@ -239,21 +239,21 @@
     }
   }
 
-  // What happened to a capture, in one sentence. TripBuddy first; otherwise the
+  // What happened to a capture, in one sentence. TripAgent first; otherwise the
   // old planner-tab path, where "delivered" counts open planner tabs.
   function whereItWent(reply, count, noun) {
     var server = reply.server;
     if (server && server.ok) {
-      return 'Sent ' + count + ' ' + noun + (count === 1 ? '' : 's') + ' to \u201c' + (server.title || 'your trip') + '\u201d on TripBuddy \u2014 review them in the planner.';
+      return 'Sent ' + count + ' ' + noun + (count === 1 ? '' : 's') + ' to \u201c' + (server.title || 'your trip') + '\u201d on TripAgent \u2014 review them in the planner.';
     }
     var why = server && !server.notConfigured ? server.error + ' ' : '';
     if (reply.delivered) return why + 'Sent ' + count + ' ' + noun + (count === 1 ? '' : 's') + ' to ' + reply.delivered + ' planner tab' + (reply.delivered === 1 ? '' : 's') + '.';
-    return why + (server && server.notConfigured ? 'No planner tab is open \u2014 set up TripBuddy above, or start the app.' : 'Nothing was delivered.');
+    return why + (server && server.notConfigured ? 'No planner tab is open \u2014 set up TripAgent above, or start the app.' : 'Nothing was delivered.');
   }
 
   $('server-save-btn').addEventListener('click', async function () {
     var url = $('server-url').value.trim();
-    if (!url) { showStatus('Paste your TripBuddy URL first.', true); return; }
+    if (!url) { showStatus('Paste your TripAgent URL first.', true); return; }
     var origin;
     try { origin = new URL(url).origin + '/*'; } catch (err) { showStatus('That is not a URL.', true); return; }
     // The manifest covers workers.dev; a custom domain needs the user's OK once.
@@ -266,7 +266,7 @@
     }
     var reply = await send({ type: 'SET_CONNECTOR', url: url });
     if (!reply.ok) { showStatus(reply.error, true); return; }
-    showStatus('TripBuddy connected.');
+    showStatus('TripAgent connected.');
     refresh();
   });
 
@@ -324,7 +324,7 @@
     } else if (!reply.captured) {
       showStatus('Nothing recognizable here \u2014 scroll the results into view, or right-click a price instead.', true);
     } else if (reply.server && reply.server.ok) {
-      showStatus('Found ' + reply.captured + ' \u2014 sent to \u201c' + (reply.server.title || 'your trip') + '\u201d on TripBuddy. Review them in the planner.');
+      showStatus('Found ' + reply.captured + ' \u2014 sent to \u201c' + (reply.server.title || 'your trip') + '\u201d on TripAgent. Review them in the planner.');
     } else {
       showStatus('Found ' + reply.captured + ', ' + reply.added + ' new.' + (reply.server && !reply.server.notConfigured ? ' ' + reply.server.error : ''), !reply.added);
     }

@@ -337,7 +337,7 @@ function TripWorkspace({ initial, onSnapshot }) {
         {/* TripAgent capture (extension + Claude) — outside the edit panel
             on purpose: an offer can arrive while the data-entry tools are
             collapsed, and its "N waiting" badge has to stay visible. */}
-        <TripAgentPanel onAddRows={appendRows} rates={rates} existingStayGroups={parsed.stay.map((g) => g.key)} />
+        <TripAgentPanel onAddRows={appendRows} rates={rates} existingStayGroups={parsed.stay.map((g) => g.key)} existingLegs={parsed.travel.map((g) => g.key)} />
 
         {effectiveEditOpen && (
         <>

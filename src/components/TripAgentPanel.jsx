@@ -4,6 +4,7 @@ import { offerCostText, rowCostIsParseable, offerPreviewRow, currenciesNeedingRa
 import { costTextIssue } from '../utils/parseTripNotes.js';
 import { extractNotesFromImages, withWindow } from '../utils/screenshotExtract.js';
 import { parsePortalText } from '../utils/pasteResults.js';
+import EntryCards from './EntryCards';
 import { imageFileToUpload } from '../utils/imageForUpload.js';
 
 // The user's own Anthropic key, kept only in this browser. localStorage can
@@ -40,7 +41,7 @@ function priceLabel(offer) {
   return 'no price';
 }
 
-export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = {}, existingStayGroups = [] }) {
+export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = {}, existingStayGroups = [], existingLegs = [] }) {
   const {
     offers, capturedRates, extension, dismissOffer, clearOffers, refreshFromExtension, takeRowsFor, stageNotes, stageRawOffers,
     connectorUrl, setConnectorUrl, connector, pullFromClaude,
@@ -265,35 +266,8 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
             </p>
           </div>
 
-          {/* Paste the page's text — free: no AI, no key, nothing to pay. */}
-          <form onSubmit={handleReadPaste} className="mb-2 pb-3 border-b border-slate-100">
-            <label className="text-[0.65rem] uppercase tracking-wide text-slate-500 block">
-              <span className="block mb-1">Or paste the results page's text</span>
-              <textarea
-                value={pasteText}
-                onChange={(e) => setPasteText(e.target.value)}
-                rows={4}
-                placeholder={'Select all on the portal\'s results page, copy, and paste here.\n5:30 PM\n7h 15m\n5:45 AM\n$962\nDelta …'}
-                aria-label="Pasted results text"
-                className="w-full font-mono text-xs px-2 py-1.5 rounded border border-slate-300 focus:border-blue-400 focus:outline-none normal-case"
-              />
-            </label>
-            <div className="flex flex-wrap items-center gap-2 mt-2">
-              <button
-                type="submit"
-                disabled={!pasteText.trim() || !basisAnswered}
-                className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:bg-slate-300"
-              >
-                Read pasted text
-              </button>
-              <span className="text-xs text-slate-500">Read right here — no AI, no cost. Flight results from Capital One / Amex style pages.</span>
-            </div>
-            {!basisAnswered && pasteText.trim() && (
-              <p className="text-xs text-amber-700 mt-2">Say whether the prices are per traveler or the total for everyone (above), then read it.</p>
-            )}
-            {paste.error && <p className="text-xs text-red-600 mt-2">{paste.error}</p>}
-            {paste.message && <p className="text-xs text-green-700 mt-2">{paste.message}</p>}
-          </form>
+          {/* Input cards: the guided way in — typed, dictated, or spoken. */}
+          <EntryCards onStage={stageRawOffers} defaultWindow={defaultWindow} existingLegs={existingLegs} />
 
           {/* Type in a price — for anything the extension cannot reach: a
               bank portal's own page, a quote by email, a price read over the
@@ -428,6 +402,36 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
                 </label>
               )}
           </div>
+
+          {/* Paste the page's text — free: no AI, no key, nothing to pay. */}
+          <form onSubmit={handleReadPaste} className="mb-2 pb-3 border-b border-slate-100">
+            <label className="text-[0.65rem] uppercase tracking-wide text-slate-500 block">
+              <span className="block mb-1">Or paste the results page's text</span>
+              <textarea
+                value={pasteText}
+                onChange={(e) => setPasteText(e.target.value)}
+                rows={4}
+                placeholder={'Select all on the portal\'s results page, copy, and paste here.\n5:30 PM\n7h 15m\n5:45 AM\n$962\nDelta …'}
+                aria-label="Pasted results text"
+                className="w-full font-mono text-xs px-2 py-1.5 rounded border border-slate-300 focus:border-blue-400 focus:outline-none normal-case"
+              />
+            </label>
+            <div className="flex flex-wrap items-center gap-2 mt-2">
+              <button
+                type="submit"
+                disabled={!pasteText.trim() || !basisAnswered}
+                className="text-xs font-semibold uppercase tracking-wide px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:bg-slate-300"
+              >
+                Read pasted text
+              </button>
+              <span className="text-xs text-slate-500">Read right here — no AI, no cost. Flight results from Capital One / Amex style pages.</span>
+            </div>
+            {!basisAnswered && pasteText.trim() && (
+              <p className="text-xs text-amber-700 mt-2">Say whether the prices are per traveler or the total for everyone (above), then read it.</p>
+            )}
+            {paste.error && <p className="text-xs text-red-600 mt-2">{paste.error}</p>}
+            {paste.message && <p className="text-xs text-green-700 mt-2">{paste.message}</p>}
+          </form>
 
           {/* Read a screenshot — the capture path that works on any device,
               iPhone included, for pages only the user can see. */}

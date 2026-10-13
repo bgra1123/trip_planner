@@ -256,6 +256,75 @@ record('the captured flight lands in the table', /Turkish Airlines/.test(afterAd
 record('the window tag survives into the table', /14-19 Aug/.test(afterAdd));
 record('the staging list empties once added', !/Add all \d+ to table/.test(afterAdd));
 
+// Input cards: the guided way in. Nothing assumed; refusals are specific.
+{
+  const cardPage = await browser.newPage();
+  cardPage.on('pageerror', (e) => pageErrors.push(String(e)));
+  await cardPage.goto(BASE, { waitUntil: 'networkidle', timeout: 20_000 });
+  await cardPage.getByRole('button', { name: /TripAgent capture/i }).click();
+  const card = (label) => cardPage.getByLabel(`Card: ${label}`, { exact: true });
+  const addFlight = cardPage.getByRole('button', { name: 'Add flight to review list' });
+  const staged = () => cardPage.locator('table').filter({ has: cardPage.locator('th', { hasText: 'Source' }) });
+
+  await card('From').fill('New York');
+  await card('To').fill('Paris');
+  await card('Departs').fill('6:30 pm');
+  await card('Arrives').fill('7:45 am');
+  await card('Airline').fill('Air France');
+  await card('Fare or class').fill('Main Basic');
+  await card('Price').fill('612');
+  await addFlight.click();
+  let body = await cardPage.locator('body').innerText();
+  record('a price with no currency is refused with a reason', /Choose the currency/.test(body) && (await staged().count()) === 0);
+  await card('Currency').selectOption('USD');
+  await addFlight.click();
+  body = await cardPage.locator('body').innerText();
+  record('a flight price with no per-traveler answer is refused', /per traveler, or the total for everyone/.test(body) && (await staged().count()) === 0);
+  await card('Price is').selectOption('per_traveler');
+  await addFlight.click();
+  body = await cardPage.locator('body').innerText();
+  record('per traveler asks how many people', /How many people are travelling/.test(body) && (await staged().count()) === 0);
+  await card('Travelers').fill('2');
+  await addFlight.click();
+  await cardPage.getByText(/Added the flight to the review list/).waitFor({ timeout: 5000 }).catch(() => {});
+  body = await cardPage.locator('body').innerText();
+  record('with every answer given, the flight is staged for review', /Added the flight to the review list/.test(body) && (await staged().count()) === 1);
+  record('it is one NYC → PAR leg, doubled for two travelers', /NYC → PAR/.test(body) && /\$1,?224/.test(body), (body.match(/\$\d[\d,]*/g) || []).join(' '));
+  record('the review list shows the fare and how it was totalled', /fare: Main Basic/.test(body) && /USD 612 per traveler × 2/.test(body));
+  record('nothing reached the plan table', !(await cardPage.locator('table').filter({ has: cardPage.locator('th', { hasText: 'Group / Leg' }) }).locator('tbody tr').filter({ hasText: 'Air France' }).count()));
+  record('the form keeps the route and your answers for the next flight', (await card('From').inputValue()) === 'New York' && (await card('Currency').inputValue()) === 'USD' && (await card('Price is').inputValue()) === 'per_traveler' && (await card('Price').inputValue()) === '');
+
+  // One sentence fills the card; the user still answers anything it can't know.
+  await card('describe it in a sentence').fill('flight from New York to Paris, leaves 9 pm, lands 9:10 am, Delta, 540 dollars for two travelers');
+  await cardPage.getByRole('button', { name: 'Fill the card' }).click();
+  record('a sentence fills the route, times, airline and price', (await card('To').inputValue()) === 'Paris' && (await card('Departs').inputValue()) === '9:00 pm' && (await card('Airline').inputValue()) === 'Delta' && (await card('Price').inputValue()) === '540' && (await card('Currency').inputValue()) === 'USD');
+  await card('Price is').selectOption('');
+  await addFlight.click();
+  record('"for two travelers" did not decide per traveler vs total for the user', /per traveler, or the total for everyone/.test(await cardPage.locator('body').innerText()));
+  await card('Price is').selectOption('total');
+  await addFlight.click();
+  await cardPage.getByText(/Added the flight/).waitFor({ timeout: 3000 }).catch(() => {});
+  record('answered "total", the second flight is staged at the price as given', (await staged().locator('tbody tr').count()) === 2 && /\$540/.test(await cardPage.locator('body').innerText()));
+
+  // Hotel card: per night needs the nights; a hotel is never "per traveler".
+  await cardPage.getByRole('tab', { name: 'Hotel' }).click();
+  await card('describe it in a sentence').fill('Hotel Le Marais in Paris, 280 euros a night for 3 nights');
+  await cardPage.getByRole('button', { name: 'Fill the card' }).click();
+  record('a hotel sentence fills city, name, price, per night and nights', (await card('City').inputValue()) === 'Paris' && (await card('Hotel name').inputValue()) === 'Hotel Le Marais' && (await card('Price is').inputValue()) === 'per_night' && (await card('Nights').inputValue()) === '3');
+  record('a hotel card has no per-traveler question', (await cardPage.getByLabel('Card: Travelers', { exact: true }).count()) === 0);
+  await cardPage.getByRole('button', { name: 'Add hotel to review list' }).click();
+  await cardPage.getByText(/Added the hotel/).waitFor({ timeout: 3000 }).catch(() => {});
+  body = await cardPage.locator('body').innerText();
+  const hotelRow = staged().locator('tbody tr').filter({ hasText: 'Hotel Le Marais' });
+  record('the hotel is staged under its city, €280 a night for 3 nights', (await hotelRow.locator('input').first().inputValue()) === 'Paris' && /€280\/night x3/.test(await hotelRow.innerText()) && (await staged().locator('tbody tr').count()) === 3, await hotelRow.innerText());
+
+  // Activity: a name is required; the price is for everyone.
+  await cardPage.getByRole('tab', { name: 'Activity' }).click();
+  await cardPage.getByRole('button', { name: 'Add activity to review list' }).click();
+  record('an activity with no name is refused', /What is the activity/.test(await cardPage.locator('body').innerText()));
+  await cardPage.close();
+}
+
 record('no uncaught page errors', pageErrors.length === 0, pageErrors.join('\n'));
 
 await browser.close();

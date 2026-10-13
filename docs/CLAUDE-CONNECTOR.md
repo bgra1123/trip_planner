@@ -96,6 +96,20 @@ set up or can't be reached, the extension falls back to pushing into an open
 planner tab, as before. Captures from Chrome and from Claude land in the same
 review list and de-duplicate against each other.
 
+**Adding by card (no Claude needed).** The planner's **TripAgent capture** panel
+opens on guided input cards: Flight, Train, Hotel, Activity. Fill a few clearly
+labelled fields, or use **Say it or type it in one go**: type or dictate a
+sentence ("flight from New York to Paris, leaves 6:30 pm, lands 7:45 am, Air
+France, 612 dollars each for two travelers") and **Fill the card** puts what it
+heard into the fields for you to check. On iPhone and Android, the keyboard's
+microphone button dictates into any field, and browsers with speech recognition
+also get a **Speak** button. The card refuses what would make a wrong number: a
+price needs a currency you chose, a flight or train price needs "per traveler or
+total" (and a count), and a per-night hotel price needs the nights. It never
+decides those for you, even from a sentence ("for two travelers" alone doesn't
+say whether $612 is each or total). What you add lands in the review list; nothing
+reaches your plan until you tap Add there.
+
 **Adding from a card portal (Capital One, Amex, …).** These show prices only
 when you're logged in, so Claude can't look them up for you. Three ways in, best
 first:

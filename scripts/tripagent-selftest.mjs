@@ -24,6 +24,8 @@ import {
   removeTrip, forgetDeleted, adoptRemoteTrip, replaceFromRemote, markSynced, isDirty,
 } from '../src/utils/tripStore.js';
 import { parsePortalText, METRO as PASTE_METRO, metroOf as pasteMetroOf } from '../src/utils/pasteResults.js';
+import { buildOfferFromCard, normalizeLeg, readClock, emptyCard } from '../src/utils/entryCard.js';
+import { parseSpokenEntry } from '../src/utils/spokenEntry.js';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -860,6 +862,76 @@ Nonstop`;
   check('the extension and the planner list the same number of airports', (metroBlock.match(/[A-Z]{3}: '[A-Z]{3}'/g) || []).length, Object.keys(PASTE_METRO).length);
   ok('…and map every one to the same city', Object.keys(PASTE_METRO).every((code) => scrapers.metroOf(code) === PASTE_METRO[code]));
   check('an unlisted airport keeps its own code', [pasteMetroOf('MUC'), scrapers.metroOf('MUC')], ['MUC', 'MUC']);
+}
+
+// ---- input cards: validation and the spoken-sentence reader -----------------
+{
+  check('a city name becomes its city code', normalizeLeg('New York'), { code: 'NYC', airport: '' });
+  check('an airport becomes its city, remembered', normalizeLeg('ewr'), { code: 'NYC', airport: 'EWR' });
+  check('an unknown place is kept as typed', normalizeLeg('Lyon'), { code: 'Lyon', airport: '' });
+  check('blank is blank', normalizeLeg('  '), { code: '', airport: '' });
+  check('clock: 6:30 pm', readClock('6:30 pm'), '18:30');
+  check('clock: 6pm', readClock('6pm'), '18:00');
+  check('clock: 6.30pm', readClock('6.30pm'), '18:30');
+  check('clock: 24h', readClock('07:45'), '07:45');
+  check('clock: nonsense is empty, not a made-up time', readClock('soon'), '');
+
+  const flight = { ...emptyCard('flight'), from: 'New York', to: 'JFK', depart: '6:30 pm', arrive: '7:45 am', carrier: 'Air France', fare: 'Main Basic', price: '1,062', currency: 'USD', basis: 'per_traveler', travelers: '2' };
+  // from and to resolving to the same city is refused...
+  ok('the same city twice is refused', buildOfferFromCard('flight', { ...flight, to: 'New York' }).errors.some((e) => e.field === 'to'));
+  const good = buildOfferFromCard('flight', { ...flight, to: 'Paris' });
+  check('a complete flight card has no errors', good.errors, []);
+  check('the raw offer uses city codes', [good.raw.from, good.raw.to], ['NYC', 'PAR']);
+  check('the price is exactly as typed (commas dropped)', good.raw.price, { amount: 1062, currency: 'USD' });
+  check('per traveler carries its count out', good.travelers, '2');
+  ok('the fare is kept in the detail', /fare: Main Basic/.test(good.raw.detail), good.raw.detail);
+  const cardOffers = normalizeOffers([good.raw], { source: 'card' });
+  check('it normalizes to one NYC → PAR flight in dollars', [cardOffers[0].group, cardOffers[0].price.currency, cardOffers[0].departure], ['NYC → PAR', 'USD', '18:30']);
+  check('and the planner totals it for two', totalForTravelers(cardOffers, good.travelers)[0].price.low, 2124);
+  const withAirport = buildOfferFromCard('flight', { ...flight, from: 'EWR', to: 'ORY' });
+  ok('typed airports are kept in the detail while the leg is the city pair', /airports: EWR → ORY/.test(withAirport.raw.detail) && withAirport.raw.from === 'NYC' && withAirport.raw.to === 'PAR', withAirport.raw.detail);
+
+  const fields = (kind, v) => buildOfferFromCard(kind, v).errors.map((e) => e.field).sort();
+  check('a price with no currency is refused (no default)', fields('flight', { ...flight, to: 'Paris', currency: '' }), ['currency']);
+  check('a flight price with no per-traveler answer is refused', fields('flight', { ...flight, to: 'Paris', basis: '' }), ['basis']);
+  check('per traveler with no count is refused', fields('flight', { ...flight, to: 'Paris', travelers: '' }), ['travelers']);
+  check('zero travelers is refused', fields('flight', { ...flight, to: 'Paris', travelers: '0' }), ['travelers']);
+  check('"total" needs no count', fields('flight', { ...flight, to: 'Paris', basis: 'total', travelers: '' }), []);
+  check('a bad time is refused', fields('flight', { ...flight, to: 'Paris', depart: 'soon' }), ['depart']);
+  check('a non-number price is refused', fields('flight', { ...flight, to: 'Paris', price: 'cheap' }), ['price']);
+  check('a negative price is refused', fields('flight', { ...flight, to: 'Paris', price: '-5' }), ['price']);
+  check('missing route is refused', fields('flight', { ...emptyCard('flight') }), ['from', 'to']);
+  check('no price needs no currency or answer (a points fare can still be added)', fields('flight', { ...emptyCard('flight'), from: 'NYC', to: 'PAR', note: '45,000 points' }), []);
+  check('a train works the same way', fields('train', { ...emptyCard('train'), from: 'Paris', to: 'Lyon', price: '40', currency: 'EUR', basis: 'total' }), []);
+
+  const hotel = { ...emptyCard('hotel'), place: 'Paris', name: 'Le Marais Boutique', price: '280', currency: 'USD', priceKind: 'per_night', nights: '3', note: 'Amex FHR' };
+  check('a complete hotel card has no errors', fields('hotel', hotel), []);
+  const hotelOffer = normalizeOffers([buildOfferFromCard('hotel', hotel).raw], { source: 'card' })[0];
+  check('a per-night hotel keeps its nights', [hotelOffer.group, hotelOffer.perNight, hotelOffer.nights, hotelOffer.price.low], ['Paris', true, 3, 280]);
+  check('a hotel is never asked per traveler, and never multiplied', [fields('hotel', { ...hotel, basis: '' }), totalForTravelers([hotelOffer], 2)[0].price.low], [[], 280]);
+  check('a per-night price needs nights', fields('hotel', { ...hotel, nights: '' }), ['nights']);
+  check('a hotel price needs per night or stay', fields('hotel', { ...hotel, priceKind: '' }), ['priceKind']);
+  check('a hotel needs a city', fields('hotel', { ...hotel, place: '' }), ['place']);
+  check('an activity needs a name', fields('activity', { ...emptyCard('activity') }), ['name']);
+  check('a free activity is fine', fields('activity', { ...emptyCard('activity'), name: 'Louvre late opening' }), []);
+
+  // Spoken sentences: fill what was said, decide nothing that wasn't.
+  const spoken = parseSpokenEntry('Flight from New York to Paris, leaves 6:30 pm, lands 7:45 am, Air France, 612 dollars each for two travelers', 'flight').fields;
+  check('a full sentence fills the route, times, airline and price', [spoken.from, spoken.to, spoken.depart, spoken.arrive, spoken.carrier, spoken.price, spoken.currency], ['New York', 'Paris', '6:30 pm', '7:45 am', 'Air France', '612', 'USD']);
+  check('"each" and "two travelers" fill per traveler x 2', [spoken.basis, spoken.travelers], ['per_traveler', '2']);
+  const codes = parseSpokenEntry('JFK to CDG departing 18:30 arriving 07:45 on Delta nonstop $962 in total', 'flight').fields;
+  check('airport codes, 24h times, nonstop and "in total"', [codes.from, codes.to, codes.depart, codes.arrive, codes.carrier, codes.stops, codes.price, codes.currency, codes.basis], ['JFK', 'CDG', '18:30', '07:45', 'Delta', '0', '962', 'USD', 'total']);
+  const unsure = parseSpokenEntry('flight new york to paris 612 dollars for two travelers', 'flight').fields;
+  ok('with no "each" or "total", per traveler vs total is left for the user', unsure.basis === undefined && unsure.travelers === '2' && unsure.price === '612', JSON.stringify(unsure));
+  const noCurrency = parseSpokenEntry('flight new york to paris 612', 'flight').fields;
+  ok('a bare number is not guessed to be a price or a currency', noCurrency.price === undefined && noCurrency.currency === undefined, JSON.stringify(noCurrency));
+  const both = parseSpokenEntry('flight new york to paris 500 dollars total per person', 'flight').fields;
+  ok('contradictory words decide nothing', both.basis === undefined);
+  const spokenHotel = parseSpokenEntry('Hotel Le Marais in Paris, 280 euros a night for 3 nights', 'hotel').fields;
+  check('a hotel sentence', [spokenHotel.place, spokenHotel.name, spokenHotel.price, spokenHotel.currency, spokenHotel.priceKind, spokenHotel.nights], ['Paris', 'Hotel Le Marais', '280', 'EUR', 'per_night', '3']);
+  check('an activity sentence', parseSpokenEntry('Louvre late opening, 25 euros', 'activity').fields.name, 'Louvre late opening');
+  check('nothing recognizable fills nothing', parseSpokenEntry('um well', 'flight').found, []);
+  check('empty fills nothing', parseSpokenEntry('', 'hotel').found, []);
 }
 
 // ---- source links and price age ------------------------------------------

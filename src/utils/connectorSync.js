@@ -1,4 +1,4 @@
-// Planner side of the TripAgent server (mcp-server/). One server holds the
+// Planner side of the TripBuddy server (mcp-server/). One server holds the
 // user's trips for both Claude and the planner: the planner saves each trip's
 // snapshot there, Claude reads it and records options into it, and the
 // planner pulls those options into its review list and tells the server which
@@ -34,13 +34,13 @@ async function request(apiBase, path, init, { allow404 = false } = {}) {
   try {
     res = await fetch(`${apiBase}${path}`, init);
   } catch {
-    throw new Error('Could not reach TripAgent — check the URL and your connection.');
+    throw new Error('Could not reach TripBuddy — check the URL and your connection.');
   }
   if (res.status === 404) {
     if (allow404) return null;
-    throw new Error('TripAgent did not recognize that URL — check it matches the one added in Claude.');
+    throw new Error('TripBuddy did not recognize that URL — check it matches the one added in Claude.');
   }
-  if (!res.ok) throw new Error(`TripAgent answered ${res.status}.`);
+  if (!res.ok) throw new Error(`TripBuddy answered ${res.status}.`);
   return res.json();
 }
 

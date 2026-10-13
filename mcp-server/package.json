@@ -1,8 +1,8 @@
 {
-  "name": "tripagent-mcp",
+  "name": "tripbuddy-mcp",
   "version": "2.0.0",
   "private": true,
-  "description": "TripAgent: the one MCP server that lets Claude read and record trips shared with the trip planner.",
+  "description": "TripBuddy: the one MCP server that lets Claude read and record trips shared with the trip planner.",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",

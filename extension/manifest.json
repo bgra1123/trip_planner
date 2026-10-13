@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "TripAgent Capture",
+  "name": "TripBuddy Capture",
   "version": "0.4.0",
   "description": "Capture flight, train and hotel prices from any page — right-click a price, or click Capture on whatever site you have open. Sends them to your Trip Planner.",
   "permissions": [
@@ -24,7 +24,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "TripAgent Capture"
+    "default_title": "TripBuddy Capture"
   },
   "content_scripts": [
     {

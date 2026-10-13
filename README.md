@@ -10,7 +10,7 @@ An interactive React-based trip planning tool that optimizes your Europe itinera
 - **Flexible Stay Duration**: Drag slider to adjust Milan stay (1–7 days)
 - **Family-Friendly Recommendations**: Optimized for travel with infant
 - **Cost Breakdown**: Real-time cost estimation for flights and train
-- **Several Trips**: Keep a named trip per journey; with the TripAgent connector, Claude sees the same trips
+- **Several Trips**: Keep a named trip per journey; with the TripBuddy connector, Claude sees the same trips
 - **Multi-Currency**: Mix EUR, USD, GBP, TRY and CHF; set `RATE:` lines to fold them into one total
 - **Price Capture**: Right-click any price, scrape supported portals, or ask Claude to search
 - **Responsive Design**: Works seamlessly on mobile (iOS), tablet, and desktop
@@ -73,18 +73,18 @@ address bar.
 
 ## 📌 Capturing prices on iPhone
 
-**Easiest: tell Claude.** With the TripAgent connector set up once
+**Easiest: tell Claude.** With the TripBuddy connector set up once
 ([docs/CLAUDE-CONNECTOR.md](docs/CLAUDE-CONNECTOR.md)), attach a screenshot of
 your card portal's results in the Claude app, or just say the flight out loud
 ("New York to Paris, 6:30 pm, $612 for the two of us"), or ask it to search ("find flights NYC to Paris on 21 Oct") using the travel connectors you have in the Claude app, and say which trip it
 is for. Claude records the options; they're waiting in the planner for review
 the next time you open it. Correct them by voice too ("the Air France one is
-$640"). No API key needed. TripAgent is the one server for Claude and the
+$640"). No API key needed. TripBuddy is the one server for Claude and the
 planner, so they share the same trips and Claude can show your trip's path and
 rank its cheapest combinations.
 
 **Or read it in the planner.** Take a screenshot of your card portal's results,
-open the planner's **TripAgent capture** panel, pick the screenshot under
+open the planner's **TripBuddy capture** panel, pick the screenshot under
 **Screenshot**, and tap **Read screenshot**. Claude reads it into options you
 review before anything is added. This works for pages only you can see
 (logged in), on any device. It uses your own Anthropic API key, which stays
@@ -118,7 +118,7 @@ trip_planner/
 ├── extension/                    # Browser extension (MV3) — see its README
 │   ├── lib/capture.js            # Notes-line formatting, shared by worker + popup
 │   └── scrapers.js               # Site adapters, JSON-LD + text heuristics
-├── mcp-server/                   # TripAgent: the one server for Claude and the planner
+├── mcp-server/                   # TripBuddy: the one server for Claude and the planner
 ├── scripts/
 │   ├── generate-report.mjs       # Notes → trip-plan.json/.md, no browser
 │   ├── extract-screenshot.mjs    # Screenshot → trip notes, via the Claude API
@@ -145,10 +145,10 @@ one covers every site, which is exactly why there are several.
 | **Capture this page** (`extension/`) | any page, anywhere | click one button | a page has no readable prices |
 | **Automatic scraping** (`extension/`) | Google Flights, Kayak, Skyscanner, Booking.com, Trainline, DB | none | a site redesigns |
 | **Bank travel portals** (`extension/`) | Capital One, Amex — in your logged-in session | none | a portal redesigns |
-| **TripAgent connector** (`mcp-server/`) | a screenshot or spoken details shared with Claude in the Claude app, any device | attach it or speak, say which trip | one-time Cloudflare deploy — see [docs/CLAUDE-CONNECTOR.md](docs/CLAUDE-CONNECTOR.md) |
-| **Input cards** (TripAgent panel) | guided Flight / Train / Hotel / Activity forms, typed, dictated, or filled from one spoken sentence, any device | pick a card, fill a few fields | free; asks currency and per traveler vs total, never assumes |
-| **Paste results** (TripAgent panel) | the copied text of a Capital One / Amex style flight-results page, any device | select all, copy, paste, say per traveler or total | free (no AI); only reads the portal layouts it knows, and says what it skipped |
-| **Read screenshot** (TripAgent panel) | a screenshot of any page — including a card portal only you can see — on any device, iPhone included | pick the image, tap Read | needs your own Anthropic API key (well under a cent per screenshot, using Claude Haiku) |
+| **TripBuddy connector** (`mcp-server/`) | a screenshot or spoken details shared with Claude in the Claude app, any device | attach it or speak, say which trip | one-time Cloudflare deploy — see [docs/CLAUDE-CONNECTOR.md](docs/CLAUDE-CONNECTOR.md) |
+| **Input cards** (TripBuddy panel) | guided Flight / Train / Hotel / Activity forms, typed, dictated, or filled from one spoken sentence, any device | pick a card, fill a few fields | free; asks currency and per traveler vs total, never assumes |
+| **Paste results** (TripBuddy panel) | the copied text of a Capital One / Amex style flight-results page, any device | select all, copy, paste, say per traveler or total | free (no AI); only reads the portal layouts it knows, and says what it skipped |
+| **Read screenshot** (TripBuddy panel) | a screenshot of any page — including a card portal only you can see — on any device, iPhone included | pick the image, tap Read | needs your own Anthropic API key (well under a cent per screenshot, using Claude Haiku) |
 | **Screenshot transcription CLI** (`scripts/extract-screenshot.mjs`) | the same, from the command line | run the CLI | needs `ANTHROPIC_API_KEY` |
 
 The extension is not restricted to a list of sites: the first two rows work on
@@ -158,7 +158,7 @@ capture, so you don't have to click anything there.
 Everything converges on the same trip-notes shorthand and the same editable
 rows, so nothing downstream needs to know where a line came from.
 
-Captures are **staged, not applied**: they appear in the *TripAgent capture*
+Captures are **staged, not applied**: they appear in the *TripBuddy capture*
 panel with route, times and price, and become rows in your plan only when you
 click Add. A misread page costs you a glance, never a rewritten itinerary.
 

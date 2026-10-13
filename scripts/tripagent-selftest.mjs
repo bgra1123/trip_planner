@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// End-to-end check of the TripAgent pipeline, without a browser or an API
+// End-to-end check of the TripBuddy pipeline, without a browser or an API
 // key: raw scraper/API payloads -> canonical offers -> editable table rows
 // -> the planner's own grouping, cost totals and export.
 //

@@ -1,6 +1,6 @@
-# TripAgent Integration
+# TripBuddy Integration
 
-How the browser extension, the web app and the TripAgent server fit together,
+How the browser extension, the web app and the TripBuddy server fit together,
 and what the contract between them is. (The server and Claude's tools are
 described in [CLAUDE-CONNECTOR.md](CLAUDE-CONNECTOR.md).)
 
@@ -78,7 +78,7 @@ costs you a glance, not a rewritten itinerary.
 
 ```
 ┌──────────────────────┐         ┌──────────────────────┐
-│  Any page            │  select │  TripAgent extension │
+│  Any page            │  select │  TripBuddy extension │
 │  (right-click a      │────────▶│  contextMenus        │
 │   price)             │         │      │               │
 ├──────────────────────┤         │      ▼               │
@@ -101,7 +101,7 @@ costs you a glance, not a rewritten itinerary.
                              │  tripAgentBridge.js     │
                              │      │                  │
                              │      ▼                  │
-                             │  tripAgentOffers.js ◀───┼──── TripAgent server
+                             │  tripAgentOffers.js ◀───┼──── TripBuddy server
                              │   (normalize → rows)    │   (Claude's options)
                              │      │                  │
                              │      ▼                  │
@@ -215,7 +215,7 @@ user's authenticated session. The extension is the only thing that can reach
 them, which is why it reads them in the browser:
 
 ```
-  authenticated portal tab           TripAgent server            planner (any device)
+  authenticated portal tab           TripBuddy server            planner (any device)
   ─────────────────────────          ────────────────            ────────────────────
   content.js scrapes card
         │
@@ -224,9 +224,9 @@ them, which is why it reads them in the browser:
              PUSH_OFFERS to a planner tab)
 ```
 
-With TripAgent set up the capture is kept on the server until the user reviews
+With TripBuddy set up the capture is kept on the server until the user reviews
 it, so it survives the tab closing and shows up on any device. Claude sees it
-too. Without TripAgent the capture is pushed straight into an open planner tab.
+too. Without TripBuddy the capture is pushed straight into an open planner tab.
 
 Two things the portal adapters are careful about:
 

@@ -34,7 +34,7 @@ Load the extension, in Chrome:
 Keep the planner tab open in the background from here on — captures push
 into it automatically.
 
-*(Optional: set up TripAgent ([CLAUDE-CONNECTOR.md](CLAUDE-CONNECTOR.md)) and
+*(Optional: set up TripBuddy ([CLAUDE-CONNECTOR.md](CLAUDE-CONNECTOR.md)) and
 captures are kept for you on any device, and you can ask Claude to search
 public flights and hotels for you.)*
 
@@ -53,7 +53,7 @@ Travel, or any flight/hotel site — log in, and search your route and dates.
   mouse, right-click → **Add "…" to Trip Planner**. This never fails,
   because there's nothing to scrape — you're handing it the text directly.
 - **On iPhone, or without the extension at all:** screenshot the results
-  page, then in the planner's **TripAgent capture** panel pick it under
+  page, then in the planner's **TripBuddy capture** panel pick it under
   **Screenshot** and tap **Read screenshot**. Claude reads the screenshot
   into staged options. The first time, paste your Anthropic API key
   (console.anthropic.com → API keys; create a dedicated key with a spend
@@ -73,7 +73,7 @@ Switch to the extension popup. You'll see items under **Scraped offers**
 if the planner tab is already open, this happens automatically as you
 capture.
 
-In the planner tab, open the **TripAgent capture** panel (click its header
+In the planner tab, open the **TripBuddy capture** panel (click its header
 to expand — it stays visible even with the rest of the notes editor
 collapsed). Captured offers are staged here first, never applied straight to
 your plan: check the route, time and price, then either **Add** a single one
@@ -119,7 +119,7 @@ edit the Exchange Rates panel directly — and it folds in.
 
 ## 6. Add what you actually want to do
 
-Below the price form in the **TripAgent capture** panel: paste a link (a
+Below the price form in the **TripBuddy capture** panel: paste a link (a
 reel, a blog post, anything) into **Link**, type a short note about what you
 liked in **What you liked**, and click **Save as activity**. It's added
 straight to the table as an activity — no staging step here, since typing

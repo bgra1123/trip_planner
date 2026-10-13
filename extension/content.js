@@ -25,7 +25,7 @@
     try {
       return TripAgentScrapers.scrape(document, location.href, overrides);
     } catch (err) {
-      console.warn('[TripAgent] scrape failed:', err);
+      console.warn('[TripBuddy] scrape failed:', err);
       return [];
     }
   }

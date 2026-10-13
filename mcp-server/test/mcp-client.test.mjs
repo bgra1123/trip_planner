@@ -44,7 +44,7 @@ const proc = await startWorker();
 try {
   const client = new Client({ name: 'tripagent-interop-test', version: '1.0.0' });
   await client.connect(new StreamableHTTPClientTransport(new URL(`${BASE}/mcp/${TOKEN}`)));
-  ok('the official MCP client connects and initializes', client.getServerVersion()?.name === 'tripagent');
+  ok('the official MCP client connects and initializes', client.getServerVersion()?.name === 'tripbuddy');
   ok('server instructions reach the client', /screenshot/.test(client.getInstructions() || ''));
 
   const { tools } = await client.listTools();

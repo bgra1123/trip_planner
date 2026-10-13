@@ -80,8 +80,9 @@ const PLAN = [
   const env = makeEnv();
   const init = await rpc(env, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } });
   ok('initialize echoes a supported protocol version', init.body.result.protocolVersion === '2025-06-18');
-  ok('initialize names the server TripAgent', init.body.result.serverInfo.name === 'tripagent');
+  ok('initialize names the server TripBuddy', init.body.result.serverInfo.name === 'tripbuddy');
   ok('initialize carries usage instructions', /screenshot/.test(init.body.result.instructions));
+  ok('the instructions introduce the name the user will say', /^This is TripBuddy/.test(init.body.result.instructions) && /use TripBuddy/.test(init.body.result.instructions));
   ok('the instructions cover pasted portal text, points vs cash and hotel programs', /Pasted page text/.test(init.body.result.instructions) && /miles\/points/.test(init.body.result.instructions) && /Fine Hotels/.test(init.body.result.instructions));
   ok('the instructions describe portal cards, city-level legs, and ask about travelers', /EWR - ORY/.test(init.body.result.instructions) && /city codes/.test(init.body.result.instructions) && /Never assume what a portal's price covers/.test(init.body.result.instructions) && /per traveler or for everyone/.test(init.body.result.instructions) && !/the user has confirmed/.test(init.body.result.instructions) && /cut off/.test(init.body.result.instructions) && /Earn 5X miles/.test(init.body.result.instructions));
   ok('the instructions tell Claude to record public search results here', /connected/.test(init.body.result.instructions) && /Do not book/.test(init.body.result.instructions));

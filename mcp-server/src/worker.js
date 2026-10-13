@@ -1,4 +1,4 @@
-// TripAgent — the one MCP server between Claude and the trip planner.
+// TripBuddy — the one MCP server between Claude and the trip planner.
 // A Cloudflare Worker.
 //
 // Claude (in the Claude app, any device, by voice or typing) reads and records
@@ -38,7 +38,7 @@ import {
   groupRows, deriveRouteChain, enumerateCombinations, pickedOption, costLabel, euro, sumRange,
 } from '../../src/utils/parseTripNotes.js';
 
-const SERVER_INFO = { name: 'tripagent', version: '2.0.0' };
+const SERVER_INFO = { name: 'tripbuddy', version: '2.0.0' };
 const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 const MAX_PENDING = 200;
 const MAX_TRIPS = 50;
@@ -48,7 +48,7 @@ const COMBO_CAP = 4000;
 const DEFAULT_ORIGINS = ['https://bgra1123.github.io', 'http://localhost:3000', 'http://127.0.0.1:3000'];
 const TRIP_ID_RE = /^[A-Za-z0-9_-]{6,40}$/;
 
-const INSTRUCTIONS = `This server holds the user's trips in their trip planner. Typical use: the user shares a screenshot, or pastes the text of a results page, from a booking site or credit-card travel portal (Capital One Travel, Amex Travel and the like), or dictates a flight or hotel; record every option with add_trip_options. Pasted page text is more reliable than a screenshot — read the numbers from it exactly, and ignore menus, filters and ads around the results. Capital One / Amex flight results are cards, and their layout differs between phone and desktop, so identify each part by what it is, not where it sits: a price like "$1,062"; departure time, duration and arrival time ("11:00 PM", "7h 10m", "11:10 AM"); the airline (sometimes printed twice); the fare name ("Delta Main Basic", "Bee Light", "Eco Basic" — put it in note, since basic fares have restrictions); stops ("Nonstop"); and the airports as "EWR - ORY". Ignore banners and badges ("Earn 5X miles on flights" is a perk, not a points price; "Best Price", "Fastest" are labels), filter chips and buttons. Record only results you can see in full, and say which were cut off. A leg is between cities, not airports, so set from/to to the city codes (EWR, JFK, LGA = NYC; CDG, ORY = PAR; LHR, LGW = LON; MXP, LIN = MIL) so every New York–Paris result is an alternative for the same leg, and put the exact airports ("EWR to ORY") in note. If the arrival clock is earlier than departure, it lands the next day (say so in note). Use the trip dates shown at the top of the page (e.g. "Oct 28 - Oct 31") as the window. Never assume what a portal's price covers. Before recording, confirm with the user: is the price per traveler or for everyone, how many are travelling, and does it cover the round trip or just that flight. Then pass their answer as price_basis ("per_traveler" with travelers, or "total") and give prices exactly as shown — the server does the multiplying and notes it ("$1,062 per traveler × 2"), and add_trip_options refuses priced options without a price_basis. You cannot know this from the page, so you must ask; once the user has told you for a portal in this conversation, reuse their answer instead of asking again. Card portals quote in the card's currency (usually USD) and often show a miles/points price beside the cash price: the cash price goes in price, the points go in note, never the other way round. Hotels from a card program (e.g. Amex Fine Hotels + Resorts) get the program name in note. Only record what is actually stated or shown — never estimate or invent a price, time, or airline. If the user corrects something you recorded, use update_trip_option; to drop one, remove_trip_option (both need the option's id, shown by list_pending_options and add_trip_options). Options land in the planner's review list and the user taps Add there — tell them they are waiting for review, not added. Only call create_trip when the user asks for a new trip.
+const INSTRUCTIONS = `This is TripBuddy, the user's trip planner: when they say "use TripBuddy" or ask you to plan, record or look up their trip, use these tools. It holds the user's trips in their trip planner. Typical use: the user shares a screenshot, or pastes the text of a results page, from a booking site or credit-card travel portal (Capital One Travel, Amex Travel and the like), or dictates a flight or hotel; record every option with add_trip_options. Pasted page text is more reliable than a screenshot — read the numbers from it exactly, and ignore menus, filters and ads around the results. Capital One / Amex flight results are cards, and their layout differs between phone and desktop, so identify each part by what it is, not where it sits: a price like "$1,062"; departure time, duration and arrival time ("11:00 PM", "7h 10m", "11:10 AM"); the airline (sometimes printed twice); the fare name ("Delta Main Basic", "Bee Light", "Eco Basic" — put it in note, since basic fares have restrictions); stops ("Nonstop"); and the airports as "EWR - ORY". Ignore banners and badges ("Earn 5X miles on flights" is a perk, not a points price; "Best Price", "Fastest" are labels), filter chips and buttons. Record only results you can see in full, and say which were cut off. A leg is between cities, not airports, so set from/to to the city codes (EWR, JFK, LGA = NYC; CDG, ORY = PAR; LHR, LGW = LON; MXP, LIN = MIL) so every New York–Paris result is an alternative for the same leg, and put the exact airports ("EWR to ORY") in note. If the arrival clock is earlier than departure, it lands the next day (say so in note). Use the trip dates shown at the top of the page (e.g. "Oct 28 - Oct 31") as the window. Never assume what a portal's price covers. Before recording, confirm with the user: is the price per traveler or for everyone, how many are travelling, and does it cover the round trip or just that flight. Then pass their answer as price_basis ("per_traveler" with travelers, or "total") and give prices exactly as shown — the server does the multiplying and notes it ("$1,062 per traveler × 2"), and add_trip_options refuses priced options without a price_basis. You cannot know this from the page, so you must ask; once the user has told you for a portal in this conversation, reuse their answer instead of asking again. Card portals quote in the card's currency (usually USD) and often show a miles/points price beside the cash price: the cash price goes in price, the points go in note, never the other way round. Hotels from a card program (e.g. Amex Fine Hotels + Resorts) get the program name in note. Only record what is actually stated or shown — never estimate or invent a price, time, or airline. If the user corrects something you recorded, use update_trip_option; to drop one, remove_trip_option (both need the option's id, shown by list_pending_options and add_trip_options). Options land in the planner's review list and the user taps Add there — tell them they are waiting for review, not added. Only call create_trip when the user asks for a new trip.
 
 To find public options, use whatever flight, hotel or train search tools the user has connected (other connectors in this chat), then record the results here with add_trip_options: one entry per result you want them to consider, copying each price, time and carrier exactly as the search returned it, with the search's name as source (e.g. "Expedia") and the date range as window. Use the currency the search quoted, and totals for everyone travelling. Search results are live quotes that can change, so say so and never present one as booked. Do not book anything. Do not record results you did not see.`;
 
@@ -355,7 +355,7 @@ async function addTripOptions(args, env, token) {
   if (accepted.length) {
     lines.push(`Recorded ${accepted.length} option${accepted.length === 1 ? '' : 's'} in "${trip.title || 'Untitled trip'}" for review:`);
     accepted.forEach((o) => lines.push(describeOffer(o)));
-    lines.push('They appear in the planner\'s TripAgent capture panel the next time it is opened; nothing is added to the plan until the user taps Add.');
+    lines.push('They appear in the planner\'s TripBuddy capture panel the next time it is opened; nothing is added to the plan until the user taps Add.');
   }
   if (rejected.length) {
     lines.push(`Not recorded (${rejected.length}): ${rejected.join('; ')}. Fix these and call add_trip_options again for just those.`);
@@ -597,7 +597,7 @@ async function handleRpc(msg, env, token) {
         if (!result) return rpcError(msg.id, -32602, `Unknown tool: ${params.name}`);
         return rpcResult(msg.id, result);
       } catch (err) {
-        return rpcResult(msg.id, textResult(`TripAgent could not do that: ${err.message}`, true));
+        return rpcResult(msg.id, textResult(`TripBuddy could not do that: ${err.message}`, true));
       }
     }
     default:
@@ -683,7 +683,7 @@ async function handleCapture(request, env, token, id, cors) {
       const trips = await listTrips(env, token);
       if (trips.length === 1) trip = await getTrip(env, token, trips[0].id);
     }
-    if (!trip) return json({ error: 'no_active_trip', message: 'Open a trip in the planner (with TripAgent connected) so captures know where to go.' }, 409, cors);
+    if (!trip) return json({ error: 'no_active_trip', message: 'Open a trip in the planner (with TripBuddy connected) so captures know where to go.' }, 409, cors);
   } else {
     trip = await getTrip(env, token, id);
     if (!trip) return json({ error: 'Not found' }, 404, cors);

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Browser-level check of the TripAgent integration against a running app.
+// Browser-level check of the TripBuddy integration against a running app.
 // The Node self-test covers the data pipeline; this covers the parts only a
 // real browser has — the postMessage bridge, its origin checks, and the
 // staging panel's refusal to touch the plan until the user says so.
@@ -65,7 +65,7 @@ record('page announces READY to the extension on mount',
 const editCollapsed = await page.getByRole('button', { name: /Edit trip data/ }).count();
 record('the capture panel is reachable with the edit panel collapsed', editCollapsed > 0);
 
-await page.getByRole('button', { name: /TripAgent capture/i }).click();
+await page.getByRole('button', { name: /TripBuddy capture/i }).click();
 
 const addAll = () => page.getByRole('button', { name: /Add all \d+ to table/ });
 async function addAllLabel() {
@@ -138,7 +138,7 @@ record('a captured lira fare keeps its currency', /\u20ba38000|₺38000/.test(no
     });
   });
   await shotPage.goto(BASE, { waitUntil: 'networkidle', timeout: 20_000 });
-  await shotPage.getByRole('button', { name: /TripAgent capture/i }).click();
+  await shotPage.getByRole('button', { name: /TripBuddy capture/i }).click();
   await shotPage.locator('input[placeholder="sk-ant-..."]').fill('sk-ant-test-key');
   // A real (1x1) PNG, so the browser's own image decode + canvas re-encode runs.
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
@@ -175,7 +175,7 @@ record('a captured lira fare keeps its currency', /\u20ba38000|₺38000/.test(no
   const apiCalls = [];
   await pastePage.route('https://api.anthropic.com/**', (route) => { apiCalls.push(route.request().url()); route.abort(); });
   await pastePage.goto(BASE, { waitUntil: 'networkidle', timeout: 20_000 });
-  await pastePage.getByRole('button', { name: /TripAgent capture/i }).click();
+  await pastePage.getByRole('button', { name: /TripBuddy capture/i }).click();
   const pasted = ['$938', 'Delta', 'Delta', 'EWR - CDG', 'Delta Main Basic', 'Nonstop', 'Earn 5X miles on flights', '', 'Best Price',
     '12:25 AM', '28h', '9:25 AM', '$735', 'TAP', 'TAP', 'EWR - ORY', 'Discount', '1 stop', 'Earn 5X miles on flights', '',
     '5:30 PM', '7h 15m', '5:45 AM', '$962', 'Delta', 'Delta', 'JFK - CDG', 'Delta Main Basic', 'Nonstop', 'Earn 5X miles on flights', '',
@@ -261,7 +261,7 @@ record('the staging list empties once added', !/Add all \d+ to table/.test(after
   const cardPage = await browser.newPage();
   cardPage.on('pageerror', (e) => pageErrors.push(String(e)));
   await cardPage.goto(BASE, { waitUntil: 'networkidle', timeout: 20_000 });
-  await cardPage.getByRole('button', { name: /TripAgent capture/i }).click();
+  await cardPage.getByRole('button', { name: /TripBuddy capture/i }).click();
   const card = (label) => cardPage.getByLabel(`Card: ${label}`, { exact: true });
   const addFlight = cardPage.getByRole('button', { name: 'Add flight to review list' });
   const staged = () => cardPage.locator('table').filter({ has: cardPage.locator('th', { hasText: 'Source' }) });

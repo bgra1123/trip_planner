@@ -1,0 +1,1008 @@
+#!/usr/bin/env node
+// End-to-end check of the TripAgent pipeline, without a browser or an API
+// key: raw scraper/API payloads -> canonical offers -> editable table rows
+// -> the planner's own grouping, cost totals and export.
+//
+// The point is the seam: the planner's cost logic only understands the
+// shorthand in a row's cost cell, so an offer whose price does not survive
+// that round-trip is a silently-wrong total. These assertions are what
+// keep that from happening.
+//
+//   npm run tripagent:selftest
+
+import {
+  normalizeTime, normalizePrice, normalizeOffer, normalizeOffers,
+  offerToRow, offersToRows, offerCostText, rowCostIsParseable, mergeOffers,
+  offersFromNotesText, currenciesNeedingRate, offerFromLink, rowFromQuickEntry, safeHttpUrl, capturedAgo, totalForTravelers,
+} from '../src/utils/tripAgentOffers.js';
+import { groupRows, parseNotes, defaultSelection, buildExportData, parseCost, convertToBase } from '../src/utils/parseTripNotes.js';
+import {
+  HOTEL_CARD_PROGRAMS, detectCardProgram, cardProgramForStay,
+} from '../src/utils/hotelCardBenefits.js';
+import {
+  loadStore, saveStore, STORE_KEY, LEGACY_KEY, emptySnapshot, makeTrip, setSnapshot, renameTrip, addTrip, selectTrip,
+  removeTrip, forgetDeleted, adoptRemoteTrip, replaceFromRemote, markSynced, isDirty,
+} from '../src/utils/tripStore.js';
+import { parsePortalText, METRO as PASTE_METRO, metroOf as pasteMetroOf } from '../src/utils/pasteResults.js';
+import { buildOfferFromCard, normalizeLeg, readClock, emptyCard } from '../src/utils/entryCard.js';
+import { parseSpokenEntry } from '../src/utils/spokenEntry.js';
+import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+
+let passed = 0;
+const failures = [];
+
+function check(name, actual, expected) {
+  const a = JSON.stringify(actual);
+  const e = JSON.stringify(expected);
+  if (a === e) { passed += 1; return; }
+  failures.push(`${name}\n    expected: ${e}\n    actual:   ${a}`);
+}
+
+function ok(name, condition, detail) {
+  if (condition) { passed += 1; return; }
+  failures.push(`${name}${detail ? `\n    ${detail}` : ''}`);
+}
+
+// ---- time parsing --------------------------------------------------------
+check('normalizeTime 24h', normalizeTime('18:05'), '18:05');
+check('normalizeTime pads', normalizeTime('6:45'), '06:45');
+check('normalizeTime pm', normalizeTime('6:45 PM'), '18:45');
+check('normalizeTime 12am', normalizeTime('12:30 AM'), '00:30');
+check('normalizeTime 12pm', normalizeTime('12:30 PM'), '12:30');
+check('normalizeTime iso timestamp', normalizeTime('2026-08-14T06:45:00'), '06:45');
+check('normalizeTime iso with space', normalizeTime('2026-08-14 18:05'), '18:05');
+check('normalizeTime junk', normalizeTime('sometime tomorrow'), '');
+check('normalizeTime impossible', normalizeTime('99:99'), '');
+
+// ---- price parsing -------------------------------------------------------
+check('normalizePrice number', normalizePrice(2100), { low: 2100, high: 2100, currency: 'EUR' });
+check('normalizePrice euro string', normalizePrice('€2,100'), { low: 2100, high: 2100, currency: 'EUR' });
+check('normalizePrice usd cents', normalizePrice('$1,234.56'), { low: 1234.56, high: 1234.56, currency: 'USD' });
+check('normalizePrice de grouping', normalizePrice('1.234,56 EUR'), { low: 1234.56, high: 1234.56, currency: 'EUR' });
+check('normalizePrice code wins', normalizePrice('45000 TRY'), { low: 45000, high: 45000, currency: 'TRY' });
+check('normalizePrice range object', normalizePrice({ low: 350, high: 250, currency: 'eur' }), { low: 250, high: 350, currency: 'EUR' });
+check('normalizePrice empty', normalizePrice(''), null);
+
+// ---- offer normalization -------------------------------------------------
+ok('normalizeOffer drops an empty payload', normalizeOffer({ kind: 'flight' }) === null);
+ok('normalizeOffer drops a non-object', normalizeOffer('nope') === null);
+
+const flight = normalizeOffer({
+  kind: 'flight', from: 'ist', to: 'MUC', departure: '6:45 AM', arrival: '11:30',
+  carrier: 'Turkish Airlines', price: '€2100', stops: 0, duration: '3h 45m',
+  source: 'kayak', window: '14-19 Aug',
+});
+check('flight group', flight.group, 'ist → MUC');
+check('flight departure', flight.departure, '06:45');
+check('flight price', flight.price, { low: 2100, high: 2100, currency: 'EUR' });
+
+const flightRow = offerToRow(flight, 'row-1');
+check('flight row category', flightRow.category, 'travel');
+check('flight row time', flightRow.timeText, '06:45-11:30');
+check('flight row cost', flightRow.costText, '€2100');
+check('flight row window', flightRow.window, '14-19 Aug');
+ok('flight row detail mentions the source', flightRow.detail.includes('via kayak'), flightRow.detail);
+ok('flight row cost is parseable by the planner', rowCostIsParseable(flightRow));
+
+const hotel = normalizeOffer({
+  kind: 'hotel', place: 'Milan', label: 'Family room near Duomo',
+  price: { amount: 140, currency: 'EUR' }, perNight: true, nights: 3,
+});
+const hotelRow = offerToRow(hotel, 'row-2');
+check('hotel row category', hotelRow.category, 'stay');
+check('hotel row group', hotelRow.group, 'Milan');
+check('hotel per-night shorthand', hotelRow.costText, '€140/night x3');
+// The shorthand must expand to the full stay, not one night — this is the
+// assertion that catches a per-night price being totalled as a flat one.
+check('hotel cost expands to 3 nights', parseCost(hotelRow.costText).low, 420);
+
+// Regression: Number(null) === 0, so a hotel capture (which has no stops
+// field at all) was silently mislabeled "nonstop" once that coercion ran.
+check('a hotel with no stops field normalizes to null, not 0', hotel.stops, null);
+ok('a hotel detail never claims "nonstop"', !hotelRow.detail.includes('nonstop'), hotelRow.detail);
+const nonstopFlight = normalizeOffer({ kind: 'flight', from: 'IST', to: 'MUC', price: '€100', stops: 0 });
+ok('a flight with a real zero-stops still reads nonstop', offerToRow(nonstopFlight, 'row-ns').detail.includes('nonstop'));
+
+const train = normalizeOffer({ kind: 'train', from: 'MUN', to: 'MILAN', price: { low: 250, high: 350, currency: 'EUR' } });
+check('train range shorthand', offerCostText(train), '€250-350');
+check('train range parses back', [parseCost(offerCostText(train)).low, parseCost(offerCostText(train)).high], [250, 350]);
+
+// ---- currency ------------------------------------------------------------
+// A currency the planner knows is written faithfully, symbol and all. The
+// amount must never be quietly relabelled as euros.
+const lira = normalizeOffer({ kind: 'flight', from: 'IST', to: 'ESB', price: '45000 TRY' });
+const liraRow = offerToRow(lira, 'row-3');
+check('a known non-euro currency keeps its own symbol', liraRow.costText, '₺45000');
+check('a lira cost parses back as lira', [parseCost(liraRow.costText).low, parseCost(liraRow.costText).currency], [45000, 'TRY']);
+ok('a lira cost is parseable', rowCostIsParseable(liraRow));
+
+// Regression: there is no word boundary between "Y" and "4" in "TRY45000",
+// so a \b-anchored code pattern silently dropped the currency and defaulted
+// the amount to euros.
+check('a code glued to its amount is still read', normalizePrice('TRY45000'), { low: 45000, high: 45000, currency: 'TRY' });
+check('a symbol glued to its amount is still read', normalizePrice('₺45000'), { low: 45000, high: 45000, currency: 'TRY' });
+check('CHF is recognized as a word marker', normalizePrice('CHF 250'), { low: 250, high: 250, currency: 'CHF' });
+
+// Regression: a nights multiplier is a quantity, not a price. "x3" used to be
+// scooped up as the low end of a range.
+check('a nights multiplier is not a price', normalizePrice('€140/night x3'), { low: 140, high: 140, currency: 'EUR' });
+check('a spelled-out nights count is not a price', normalizePrice('€90/night for 3 nights'), { low: 90, high: 90, currency: 'EUR' });
+
+// A currency outside the planner's vocabulary must not be converted or
+// dropped: the cost cell stays empty and the amount survives in the detail.
+const yen = normalizeOffer({ kind: 'flight', from: 'HND', to: 'IST', price: '145000 JPY' });
+const yenRow = offerToRow(yen, 'row-3b');
+check('an unknown currency leaves the cost cell empty', yenRow.costText, '');
+ok('an unknown currency is preserved in the detail', yenRow.detail.includes('JPY 145000'), yenRow.detail);
+ok('an unknown currency is flagged as unparseable', !rowCostIsParseable(yenRow));
+
+// Conversion is gated on a rate being on file — never a silent 1:1 guess.
+check('a foreign currency with no rate is reported', currenciesNeedingRate([lira], {}), ['TRY']);
+check('a foreign currency with a rate is not reported', currenciesNeedingRate([lira], { TRY: 0.01814 }), []);
+check('euro costs never need a rate', currenciesNeedingRate([flight], {}), []);
+ok('an unrated cost is excluded from the base total, not guessed',
+  convertToBase(parseCost('₺45000'), {}).missingRate === true);
+check('a rated cost converts', Math.round(convertToBase(parseCost('₺45000'), { TRY: 0.01814 }).low), 816);
+
+// ---- notes captures ------------------------------------------------------
+// A hand-reviewed text selection reaches staging as trip-notes lines, parsed
+// by the planner's own grammar rather than reimplemented in the extension.
+const captured = offersFromNotesText([
+  'RATE: TRY 0.01814',
+  'FLIGHT: IST to MUN, 6:45-11:30, TRY45000, Turkish Airlines',
+  'HOTEL: Milan - near Duomo, EUR140/night x3',
+  'ACTIVITY: Duomo rooftop, EUR40',
+].join('\n'));
+check('a RATE: line is carried out of the capture', captured.rates, { TRY: 0.01814 });
+check('every priced line becomes an offer', captured.offers.length, 3);
+check('the notes categories survive', captured.offers.map((o) => o.category), ['travel', 'stay', 'activity']);
+const capturedRows = captured.offers.map((o, i) => offerToRow(o, `cap-${i}`));
+check('a captured lira flight keeps its currency', capturedRows[0].costText, '₺45000');
+// Regression: parseCost expands a per-night price across the stay, so passing
+// its result straight back through offerCostText multiplied the nights twice
+// (140/night x3 -> 420 -> "€420/night x3" -> 1260).
+check('a per-night capture keeps its unit price', capturedRows[1].costText, '€140/night x3');
+check('and still totals to the whole stay', parseCost(capturedRows[1].costText).low, 420);
+check('a captured route becomes a leg', capturedRows[0].group, 'IST → MUN');
+check('the captured rate answers its own currency', currenciesNeedingRate(captured.offers, captured.rates), []);
+
+// ---- hotel card-program benefits -------------------------------------------
+// A stay's bundled card-program benefits (a credit, a guaranteed checkout, an
+// upgrade chance) come from a small, static, dated table and are shown as a
+// list next to the price — never folded into a single "worth X% more" score.
+// Tagging rides the existing HOTEL: detail text via a `CARD:<marker>` token,
+// so an untagged stay is completely unaffected (strictly additive).
+check('exactly the two verified programs are on file', Object.keys(HOTEL_CARD_PROGRAMS).sort(), ['FHR', 'HOTEL_COLLECTION']);
+ok('the lookup is dated, since terms change without notice',
+  /2026/.test(HOTEL_CARD_PROGRAMS.FHR.capturedAt) && /2026/.test(HOTEL_CARD_PROGRAMS.HOTEL_COLLECTION.capturedAt),
+  `FHR=${HOTEL_CARD_PROGRAMS.FHR.capturedAt} HC=${HOTEL_CARD_PROGRAMS.HOTEL_COLLECTION.capturedAt}`);
+check('FHR benefits are exactly the published list', HOTEL_CARD_PROGRAMS.FHR.benefits, [
+  'Breakfast for two',
+  '$100 credit toward eligible charges',
+  'Guaranteed 4pm checkout',
+  'Noon check-in when available',
+  'Room upgrade when available',
+  'Complimentary wifi',
+]);
+check('Hotel Collection benefits are exactly the published list', HOTEL_CARD_PROGRAMS.HOTEL_COLLECTION.benefits, [
+  '$100 credit toward eligible charges',
+  '4pm late checkout when available',
+  'Noon check-in when available',
+  'Room upgrade when available',
+  'Minimum 2-night stay required',
+]);
+
+check('CARD:FHR resolves to Fine Hotels + Resorts', detectCardProgram('walk to metro, CARD:FHR').code, 'FHR');
+check('CARD:HC resolves to Hotel Collection', detectCardProgram('CARD:HC').code, 'HOTEL_COLLECTION');
+check('the full program name also resolves', detectCardProgram('CARD:Hotel Collection, near station').code, 'HOTEL_COLLECTION');
+ok('no tag means no program, never a guess', detectCardProgram('walk to metro') === null);
+ok('an unrecognized marker is never guessed at', detectCardProgram('CARD:PLATINUM') === null);
+ok('empty/missing text has no program', detectCardProgram('') === null && detectCardProgram(undefined) === null);
+
+check('cardProgramForStay scans label and detail together',
+  cardProgramForStay({ label: 'Family suite', detail: 'walk to metro, CARD:FHR' }).code, 'FHR');
+ok('an untagged stay option has no program', cardProgramForStay({ label: 'Family suite', detail: 'walk to metro' }) === null);
+ok('a stay option with no detail at all has no program', cardProgramForStay({ label: 'Family suite' }) === null);
+ok('a null option has no program', cardProgramForStay(null) === null);
+
+// The marker rides the existing HOTEL: detail grammar — no new field, no new
+// parser — so it survives parseNotes()/groupRows() exactly like any other
+// freeform detail text.
+const cardNotes = parseNotes([
+  'HOTEL: Milan - family room near Duomo, EUR140/night x3, walk to metro, CARD:FHR',
+  'HOTEL: Munich - near Hauptbahnhof, EUR120/night x1, rest stop before train',
+].join('\n'));
+check('two distinct stay groups are parsed', cardNotes.stay.length, 2);
+const taggedStay = cardNotes.stay.find((g) => g.key === 'Milan').options[0];
+const untaggedStay = cardNotes.stay.find((g) => g.key === 'Munich').options[0];
+ok('the CARD: marker survives into the parsed detail', /CARD:FHR/i.test(taggedStay.detail), taggedStay.detail);
+check('the tagged stay resolves to Fine Hotels + Resorts', cardProgramForStay(taggedStay).code, 'FHR');
+// The benefits lookup never touches the price — the per-night cost still
+// expands across the 3-night stay exactly as it would untagged.
+check('the tagged stay\'s price is untouched by the benefits lookup', taggedStay.cost.low, 420);
+check('a stay with no CARD: marker gets no program', cardProgramForStay(untaggedStay), null);
+
+// The same marker survives a captured (extension) offer too, since captures
+// go through the planner's own linesToRows() rather than a separate parser.
+const cardCapture = offersFromNotesText('HOTEL: Rome - suite near Termini, EUR200/night x2, CARD:HC');
+const cardCaptureRow = offerToRow(cardCapture.offers[0], 'cap-card');
+ok('a captured hotel detail still carries the CARD: marker', /CARD:HC/i.test(cardCaptureRow.detail), cardCaptureRow.detail);
+check('the captured stay resolves to Hotel Collection',
+  cardProgramForStay({ label: cardCaptureRow.option, detail: cardCaptureRow.detail }).code, 'HOTEL_COLLECTION');
+
+// ---- save a link as an activity -------------------------------------------
+// A reel/blog link plus the user's own note becomes an activity offer through
+// the same normalizeOffer()/offerToRow() pipeline a scraped or pasted capture
+// uses — no parallel row shape, and no fetch of the link's content.
+const linked = offerFromLink('https://instagram.com/reel/abc123', 'Rooftop bar with sunset views');
+check('a saved link becomes an activity', linked.category, 'activity');
+check('the note is the activity label, verbatim', linked.label, 'Rooftop bar with sunset views');
+check('the url is preserved on the offer', linked.sourceUrl, 'https://instagram.com/reel/abc123');
+check('no price is invented for a saved link', linked.price, null);
+
+const linkedRow = offerToRow(linked, 'row-link');
+check('the saved-link row is an activity row', linkedRow.category, 'activity');
+check('the saved-link row option is the user\'s own note', linkedRow.option, 'Rooftop bar with sunset views');
+ok('the source url is folded into the row detail, never dropped',
+  linkedRow.detail.includes('https://instagram.com/reel/abc123'), linkedRow.detail);
+check('the row carries no fabricated cost', linkedRow.costText, '');
+
+// Whitespace-only input is the same as missing — nothing to fold in, so
+// nothing is built (never a blank/guessed activity).
+ok('a link with no note is refused', offerFromLink('https://example.com/x', '   ') === null);
+ok('a note with no link is refused', offerFromLink('  ', 'Nice view') === null);
+ok('two blanks are refused', offerFromLink('', '') === null);
+
+// ---- quick price entry (a price read off an internal system, hand-typed) -
+const quickFlight = rowFromQuickEntry({
+  category: 'travel', group: 'IST → MUN', option: '07:25 departure',
+  time: '07:25-09:40', cost: '€245', window: '14-19 Aug',
+});
+check('a hand-typed flight keeps the route', quickFlight.group, 'IST → MUN');
+check('a hand-typed flight keeps the option label', quickFlight.option, '07:25 departure');
+check('a hand-typed flight cost parses back', [parseCost(quickFlight.costText).low, parseCost(quickFlight.costText).currency], [245, 'EUR']);
+ok('a hand-typed flight cost is parseable', rowCostIsParseable(quickFlight));
+check('a hand-typed flight keeps its window', quickFlight.window, '14-19 Aug');
+
+const quickStay = rowFromQuickEntry({ category: 'stay', group: 'Milan', cost: '$180' });
+check('a hand-typed stay with no option label gets a sensible fallback', quickStay.option, 'Milan option');
+check('a hand-typed stay keeps a non-euro price faithfully', quickStay.costText, '$180');
+
+const quickActivity = rowFromQuickEntry({ category: 'activity', option: 'City tour', cost: 'free' });
+check('a hand-typed activity carries no group (activities never group)', quickActivity.group, '');
+
+ok('an empty quick-entry submit builds nothing', rowFromQuickEntry({ category: 'travel' }) === null);
+ok('whitespace-only fields are the same as empty', rowFromQuickEntry({ category: 'travel', group: '  ', option: ' ', cost: '  ' }) === null);
+ok('an unknown category falls back to travel rather than crashing', rowFromQuickEntry({ category: 'nonsense', cost: '€1' }).category === 'travel');
+
+// ---- dedupe --------------------------------------------------------------
+const dupA = normalizeOffer({ kind: 'flight', from: 'IST', to: 'MUC', departure: '06:45', price: '€2100', carrier: 'TK' });
+const dupB = normalizeOffer({ kind: 'flight', from: 'IST', to: 'MUC', departure: '06:45', price: '€2100', carrier: 'TK' });
+const different = normalizeOffer({ kind: 'flight', from: 'IST', to: 'MUC', departure: '09:15', price: '€2800', carrier: 'LH' });
+check('mergeOffers collapses a re-capture', mergeOffers([dupA], [dupB, different]).length, 2);
+check('mergeOffers caps the list', mergeOffers([], [dupA, different], 1).length, 1);
+
+// Regression: the same hotel captured once via JSON-LD (which resolved a
+// place) and once via the text heuristic (which could not) used to land as
+// two offers, since the dedupe key included the mismatched group.
+const hotelViaJsonLd = normalizeOffer({ kind: 'hotel', place: 'Milan', label: 'Hotel Milano Scala', price: { amount: 220, currency: 'EUR' }, perNight: true });
+const hotelViaHeuristic = normalizeOffer({ kind: 'hotel', label: 'Hotel Milano Scala', price: '€220', perNight: true });
+check('a stay dedupes on name even when group parsing disagreed',
+  mergeOffers([], [hotelViaJsonLd, hotelViaHeuristic]).length, 1);
+const differentHotel = normalizeOffer({ kind: 'hotel', label: 'Hotel Lombardia', price: '€165', perNight: true });
+check('a genuinely different stay is not collapsed',
+  mergeOffers([], [hotelViaJsonLd, differentHotel]).length, 2);
+
+// ---- full pipeline -------------------------------------------------------
+// Four flights for one route + a scraped hotel, all the way through to the
+// planner's own totals.
+const pipelineOffers = normalizeOffers(
+  [
+    { departure: '06:45', arrival: '08:30', carrier: 'Turkish Airlines', stops: 0, price: { amount: 2100, currency: 'EUR' } },
+    { departure: '07:25', arrival: '09:10', carrier: 'Pegasus', stops: 0, price: { amount: 1850, currency: 'EUR' } },
+    { departure: '10:00', arrival: '11:45', carrier: 'Lufthansa', stops: 0, price: { amount: 3450, currency: 'EUR' } },
+    { departure: '13:15', arrival: '17:40', carrier: 'Austrian', stops: 1, price: { amount: 2400, currency: 'EUR' } },
+  ].map((f) => ({ kind: 'flight', from: 'IST', to: 'MUC', ...f })),
+  { kind: 'flight', source: 'test', window: '14-19 Aug' }
+).concat([hotel]);
+
+const rows = offersToRows(pipelineOffers);
+ok('every offer became a row', rows.length === pipelineOffers.length);
+ok('row ids are unique', new Set(rows.map((r) => r.id)).size === rows.length);
+
+const parsed = groupRows(rows, []);
+check('flights collapse into one leg with four options', [parsed.travel.length, parsed.travel[0].options.length], [1, 4]);
+check('the hotel becomes its own stay group', parsed.stay.length, 1);
+
+const exported = buildExportData(parsed, defaultSelection(parsed), 'IST → MUC');
+const cheapestFlight = Math.min(...pipelineOffers.filter((o) => o.kind === 'flight').map((o) => o.price.low));
+const firstFlight = pipelineOffers[0].price.low;
+check('travel total matches the selected flight', exported.costBreakdown.travel.low, firstFlight);
+check('accommodation total is the 3-night stay', exported.costBreakdown.accommodation.low, 420);
+check('grand total adds up', exported.costBreakdown.total.low, firstFlight + 420);
+ok('a cheaper combination is ranked first',
+  exported.combinations.ranked.length > 0 && exported.combinations.ranked[0].low === cheapestFlight + 420,
+  `ranked[0].low=${exported.combinations.ranked[0] && exported.combinations.ranked[0].low}, expected ${cheapestFlight + 420}`);
+
+// Window tagging must survive the whole trip, or combinations could mix
+// price-research rounds.
+ok('the window tag survives into the export',
+  exported.currentPick.travel[0].window === '14-19 Aug',
+  JSON.stringify(exported.currentPick.travel[0]));
+
+// ---- scrapers ------------------------------------------------------------
+// The extension's scrapers are the most fragile part of the system, so they
+// are exercised against a synthetic DOM: no real markup, just the shapes
+// the heuristic is supposed to accept and reject.
+const require = createRequire(import.meta.url);
+const scrapers = require('../extension/scrapers.js');
+
+check('detects google flights', scrapers.detectSite('https://www.google.com/travel/flights?q=IST+to+MUC').id, 'google-flights');
+check('detects booking.com', scrapers.detectSite('https://www.booking.com/searchresults.html?ss=Milan').id, 'booking-com');
+check('unknown host falls back', scrapers.detectSite('https://example.com/whatever').id, 'unknown');
+check('route from a kayak url', scrapers.routeFromUrl('https://www.kayak.com/flights/IST-MUC/2026-08-14'), { from: 'IST', to: 'MUC' });
+check('route from a skyscanner url', scrapers.routeFromUrl('https://www.skyscanner.net/transport/flights/ist/muc/260814/'), { from: 'IST', to: 'MUC' });
+check('route from query params', scrapers.routeFromUrl('https://example.com/search?origin=ist&destination=muc'), { from: 'IST', to: 'MUC' });
+check('no route to invent', scrapers.routeFromUrl('https://www.google.com/travel/flights'), null);
+check('place from a booking url', scrapers.placeFromUrl('https://www.booking.com/searchresults.html?ss=Milan%2C+Italy'), 'Milan');
+
+function fakeDoc(texts, jsonLd) {
+  const nodes = texts.map((textContent) => ({ textContent }));
+  const scripts = (jsonLd || []).map((obj) => ({ textContent: JSON.stringify(obj) }));
+  return {
+    querySelectorAll(selector) {
+      if (selector === 'script[type="application/ld+json"]') return scripts;
+      if (selector === 'li') return nodes;
+      return [];
+    },
+  };
+}
+
+const flightDoc = fakeDoc([
+  '06:45 \u2013 11:30 Turkish Airlines 3h 45m Nonstop \u20ac2,100',
+  '09:15 \u2013 11:05 Lufthansa 3h 50m 1 stop \u20ac2,800',
+  'Sort by price',                       // no price, no times
+  'Flights from \u20ac1,950',              // a price but no times
+]);
+const scraped = scrapers.scrape(flightDoc, 'https://www.kayak.com/flights/IST-MUC/2026-08-14', null);
+check('heuristic keeps only real result rows', scraped.length, 2);
+check('heuristic reads the route from the url', [scraped[0].from, scraped[0].to], ['IST', 'MUC']);
+check('heuristic reads both times', [scraped[0].departure, scraped[0].arrival], ['06:45', '11:30']);
+check('heuristic reads the price', scraped[0].price, '\u20ac2,100');
+check('heuristic reads nonstop as zero stops', scraped[0].stops, 0);
+check('heuristic counts stops', scraped[1].stops, 1);
+check('heuristic finds the carrier', scraped[0].carrier, 'Turkish Airlines');
+
+// A scraped row must survive normalization into a usable planner row.
+const scrapedRow = offerToRow(normalizeOffer(scraped[0]), 'row-scraped');
+check('scraped row group', scrapedRow.group, 'IST \u2192 MUC');
+check('scraped row cost', scrapedRow.costText, '\u20ac2100');
+ok('scraped row cost is parseable', rowCostIsParseable(scrapedRow));
+
+// A popup override must beat whatever the URL said.
+const overridden = scrapers.scrape(flightDoc, 'https://www.kayak.com/flights/IST-MUC/2026-08-14', { from: 'SAW', to: 'MUC', window: '13-18 Aug' });
+check('popup override wins over the url', [overridden[0].from, overridden[0].window], ['SAW', '13-18 Aug']);
+
+// JSON-LD is preferred when the page publishes enough of it.
+const ldDoc = fakeDoc(['06:45 \u2013 11:30 Turkish Airlines \u20ac2,100'], [
+  { '@type': 'Flight', departureAirport: { iataCode: 'IST' }, arrivalAirport: { iataCode: 'MUC' }, departureTime: '2026-08-14T06:45:00', arrivalTime: '2026-08-14T11:30:00', provider: { name: 'Turkish Airlines' }, offers: { price: '2100', priceCurrency: 'EUR' } },
+  { '@type': 'Flight', departureAirport: { iataCode: 'IST' }, arrivalAirport: { iataCode: 'MUC' }, departureTime: '2026-08-14T09:15:00', arrivalTime: '2026-08-14T13:50:00', provider: { name: 'Lufthansa' }, offers: { price: '2600', priceCurrency: 'EUR' } },
+]);
+const ldScraped = scrapers.scrape(ldDoc, 'https://www.google.com/travel/flights', null);
+check('json-ld is used when present', ldScraped.length, 2);
+check('json-ld carrier', ldScraped[0].carrier, 'Turkish Airlines');
+const ldRow = offerToRow(normalizeOffer(ldScraped[0]), 'row-ld');
+check('json-ld row time', ldRow.timeText, '06:45-11:30');
+check('json-ld row cost', ldRow.costText, '\u20ac2100');
+
+// ---- full pipeline, in a second currency ---------------------------------
+// The whole point of the rate table: a captured lira fare has to reach the
+// planner's euro totals, converted, and its absence of a rate has to keep it
+// out rather than in at 1:1.
+const mixedRows = [
+  ...offersToRows(offersFromNotesText('FLIGHT: IST to MUN, 6:45-11:30, TRY45000').offers),
+  ...offersToRows(offersFromNotesText('HOTEL: Munich - central, EUR120/night x2').offers),
+];
+const withRate = buildExportData(
+  groupRows(mixedRows, [], { TRY: 0.01814 }),
+  defaultSelection(groupRows(mixedRows, [], { TRY: 0.01814 })),
+  null
+);
+check('a rated lira fare converts into the euro total', Math.round(withRate.costBreakdown.travel.low), 816);
+check('the euro stay is unaffected by conversion', withRate.costBreakdown.accommodation.low, 240);
+check('the grand total mixes both currencies correctly', Math.round(withRate.costBreakdown.total.low), 1056);
+
+const noRate = buildExportData(
+  groupRows(mixedRows, [], {}),
+  defaultSelection(groupRows(mixedRows, [], {})),
+  null
+);
+check('an unrated lira fare is excluded from the total, not guessed at 1:1',
+  noRate.costBreakdown.travel.low, 0);
+check('and the rest of the trip still totals', noRate.costBreakdown.accommodation.low, 240);
+
+// ---- capture on an unrecognized page -------------------------------------
+// The extension injects its scraper on demand, so capture has to work on a
+// site nobody wrote an adapter for. Two things must hold there: the kind is
+// read from the page rather than assumed, and a price alone is enough to
+// qualify a row (an unknown page has no departure/arrival structure to lean on).
+function pageDoc(texts, title) {
+  const nodes = texts.map((textContent) => ({ textContent }));
+  return {
+    title: title || '',
+    querySelector() { return null; },
+    querySelectorAll(selector) {
+      if (selector === 'script[type="application/ld+json"]') return [];
+      if (selector === 'li') return nodes;
+      return [];
+    },
+  };
+}
+
+check('an unknown site is marked generic', scrapers.detectSite('https://example.com/x', pageDoc([], '')).generic, true);
+check('a hotel page is read as a stay', scrapers.detectSite('https://smallhotel.example/rooms', pageDoc([], 'Deluxe rooms in Milan')).kind, 'hotel');
+check('a rail page is read as a train', scrapers.detectSite('https://example.com/rail/tickets', pageDoc([], 'Rail tickets')).kind, 'train');
+check('a coach page is read as a bus', scrapers.detectSite('https://flixbus.example/search', pageDoc([], 'Bus from Munich')).kind, 'bus');
+check('an attraction page is read as an activity', scrapers.detectSite('https://tickets.example/duomo', pageDoc([], 'Duomo rooftop admission')).kind, 'activity');
+// "stay" is tested before "travel" on purpose: a hotel page mentions airports
+// far more often than a flight page mentions rooms.
+check('a hotel near an airport is still a stay', scrapers.detectSite('https://example.com/hotel', pageDoc([], 'Hotel near Munich Airport \u2014 rooms from')).kind, 'hotel');
+
+// A nightly rate on an unknown hotel page, with no clock times anywhere.
+const unknownHotel = scrapers.scrape(
+  pageDoc(['Garden Room \u20ac95 per night Free cancellation', 'Sort by price'], 'Rooms in Milan'),
+  'https://smallhotel.example/rooms', null
+);
+check('an unknown hotel page yields its priced row', unknownHotel.length, 1);
+check('and is categorized as a stay', unknownHotel[0].kind, 'hotel');
+const unknownHotelRow = offerToRow(normalizeOffer(unknownHotel[0]), 'row-uh');
+check('the unknown stay row lands in the stay bucket', unknownHotelRow.category, 'stay');
+ok('and carries a usable cost', rowCostIsParseable(unknownHotelRow), unknownHotelRow.costText);
+
+// A priced row with no times on an unknown page must still be captured — the
+// two-clock-times rule only applies to the sites that actually have them.
+const unknownFare = scrapers.scrape(
+  pageDoc(['Vienna to Budapest coach \u20ac19 one way'], 'Bus tickets'),
+  'https://coach.example/search', null
+);
+check('a priced row with no times is kept on an unknown page', unknownFare.length, 1);
+
+// Known sites keep the stricter rule, or their navigation and filter chrome
+// would be captured as results.
+const knownNoTimes = scrapers.scrape(
+  fakeDoc(['Flights from \u20ac1,950', 'Baggage from \u20ac25']),
+  'https://www.kayak.com/flights/IST-MUC/2026-08-14', null
+);
+check('a known flight site still requires two times', knownNoTimes.length, 0);
+
+// ---- bank travel portals -------------------------------------------------
+// A bank portal can only be read in the user's authenticated browser session,
+// so these adapters are the only path to that data. Two things must hold: the
+// portal's currency is stated rather than guessed, and a points fare is never
+// mistaken for money.
+check('capital one is detected', scrapers.detectSite('https://travel.capitalone.com/search/flights').id, 'capital-one');
+check('amex is detected', scrapers.detectSite('https://travel.americanexpress.com/flights/results').id, 'amex');
+check('bank portals are listed', scrapers.BANK_PORTALS, ['capital-one', 'amex']);
+
+check('points are recognized', scrapers.pointsIn('32,000 miles + $5.60'), '32,000 miles');
+check('pts abbreviation is recognized', scrapers.pointsIn('45,500 pts'), '45,500 pts');
+check('a plain fare has no points', scrapers.pointsIn('$320 round trip'), '');
+// A $5.60 tax beside a points fare is a fee, not the fare. Read as the price it
+// would make a transatlantic flight look like pocket change.
+check('a redemption fee is not read as the fare', scrapers.cashPriceIn('32,000 miles + $5.60 in taxes'), '');
+check('a real cash fare is read', scrapers.cashPriceIn('$320 round trip'), '$320');
+
+const portalDoc = fakeDoc([
+  '10:30 AM \u2013 10:45 PM British Airways 7h 15m Nonstop $320',
+  '6:00 AM \u2013 8:10 PM Virgin Atlantic 9h 10m 1 stop 32,000 miles + $5.60 in taxes',
+  'Filter by airline',
+]);
+const portalOffers = scrapers.scrape(portalDoc, 'https://travel.capitalone.com/search/flights?origin=JFK&destination=LHR', null);
+check('both portal cards are captured', portalOffers.length, 2);
+check('the portal route comes from its url', [portalOffers[0].from, portalOffers[0].to], ['JFK', 'LHR']);
+check('the cash fare keeps the card currency', portalOffers[0].price, '$320');
+check('the portal names itself as the source', portalOffers[0].source, 'capital-one');
+ok('a points fare carries no cash price', portalOffers[1].price === null, JSON.stringify(portalOffers[1].price));
+ok('and says so in its detail', /points/.test(portalOffers[1].detail), portalOffers[1].detail);
+
+// The decisive assertion: a points fare must not contribute money to a total.
+const pointsRow = offerToRow(normalizeOffer({ ...portalOffers[1], kind: 'flight' }) || {}, 'row-points');
+ok('a points fare cannot become a cash row', !pointsRow.costText || !rowCostIsParseable(pointsRow),
+  `costText=${pointsRow.costText}`);
+
+// A bare number on a portal card must not be read as euros. $320 is not \u20ac320.
+const bareDoc = fakeDoc(['07:00 \u2013 19:15 Delta 7h 15m Nonstop 415']);
+const bareOffers = scrapers.scrape(bareDoc, 'https://travel.americanexpress.com/flights?origin=JFK&destination=CDG', null);
+ok('a card with no currency marker is skipped rather than guessed',
+  bareOffers.length === 0 || /USD/.test(String(bareOffers[0].price)),
+  JSON.stringify(bareOffers.map((o) => o.price)));
+
+// ---- capturing from whatever tab is open ---------------------------------
+// The service worker injects the scraper on demand so capture works on pages
+// no adapter was written for. That logic decides whether to reuse an existing
+// content script, whether a page can be touched at all, and what to say when
+// it can't — so it is exercised here against a stubbed extension API rather
+// than trusted to review.
+function loadWorker({ tabUrl = 'https://smallhotel.example/rooms', contentScriptReply = null, injectResult = undefined, injectThrows = null } = {}) {
+  const calls = { sendMessage: 0, executeScript: [], badge: [] };
+  const store = {};
+  const area = () => ({
+    get: async (key) => ({ [key]: store[key] }),
+    set: async (obj) => { Object.assign(store, obj); },
+  });
+  const chromeStub = {
+    storage: { session: area(), local: area() },
+    action: {
+      setBadgeText: async (o) => { calls.badge.push(o.text); },
+      setBadgeBackgroundColor: async () => {},
+    },
+    contextMenus: { create: () => {}, onClicked: { addListener: () => {} } },
+    runtime: {
+      lastError: undefined,
+      getManifest: () => ({ version: '0.3.0' }),
+      onInstalled: { addListener: () => {} },
+      onMessage: { addListener: () => {} },
+    },
+    tabs: {
+      query: async () => [{ id: 7, url: tabUrl }],
+      sendMessage: async () => {
+        calls.sendMessage += 1;
+        if (!contentScriptReply) throw new Error('Receiving end does not exist.');
+        return contentScriptReply;
+      },
+    },
+    scripting: {
+      executeScript: async (opts) => {
+        calls.executeScript.push(opts.files ? opts.files.join(',') : 'func');
+        if (injectThrows) throw new Error(injectThrows);
+        if (opts.files) return [{}];
+        return [{ result: injectResult }];
+      },
+    },
+  };
+  const context = vm.createContext({
+    chrome: chromeStub,
+    fetch: async () => ({ ok: true }),
+    console,
+    setTimeout,
+    URL,
+    Promise,
+    JSON,
+    Object,
+    Array,
+    String,
+    Number,
+    Boolean,
+    Math,
+    Date,
+    Set,
+    Error,
+    RegExp,
+    Buffer,
+    importScripts: () => {},
+    TripCapture: { cleanText: (t) => t, guessCategory: () => 'note' },
+  });
+  vm.runInContext(readFileSync(new URL('../extension/background.js', import.meta.url), 'utf8'), context);
+  return { captureFromTab: context.captureFromTab, calls };
+}
+
+// A site with a declared content script already has the scraper running, with
+// its own debounce and page observation. Reuse it rather than injecting twice.
+{
+  const { captureFromTab, calls } = loadWorker({
+    tabUrl: 'https://www.kayak.com/flights/IST-MUC/2026-08-14',
+    contentScriptReply: { offers: [{ kind: 'flight' }], site: 'kayak' },
+  });
+  const reply = await captureFromTab({ id: 7, url: 'https://www.kayak.com/flights/IST-MUC/2026-08-14' }, {});
+  check('an existing content script is reused', reply.site, 'kayak');
+  check('and nothing is injected on top of it', calls.executeScript, []);
+}
+
+// The case this change exists for: a page with no content script at all.
+{
+  const { captureFromTab, calls } = loadWorker({
+    injectResult: { offers: [{ kind: 'hotel', place: 'Milan' }], site: 'unknown', kind: 'hotel' },
+  });
+  const reply = await captureFromTab({ id: 7, url: 'https://smallhotel.example/rooms' }, {});
+  check('an unlisted page is captured by injection', reply.offers.length, 1);
+  check('the scraper file is injected before the call that uses it', calls.executeScript, ['scrapers.js', 'func']);
+  check('the injected result carries the guessed kind', reply.kind, 'hotel');
+  ok('the content script was tried first', calls.sendMessage === 1);
+}
+
+// Pages no extension may touch, whatever its permissions. Naming the reason
+// beats a generic failure the user can only guess at.
+for (const blocked of ['chrome://settings', 'about:blank', 'devtools://devtools/x', 'https://chromewebstore.google.com/detail/x']) {
+  const { captureFromTab, calls } = loadWorker({ tabUrl: blocked });
+  let message = '';
+  try {
+    await captureFromTab({ id: 7, url: blocked }, {});
+  } catch (err) {
+    message = err.message;
+  }
+  ok(`a restricted page is refused with a reason (${blocked.split(':')[0]})`,
+    /Chrome blocks extensions/.test(message), message);
+  check(`and nothing is injected into it (${blocked.split(':')[0]})`, calls.executeScript, []);
+}
+
+// An injection that fails for any other reason must say so, and point at the
+// path that always works.
+{
+  const { captureFromTab } = loadWorker({ injectThrows: 'Frame was detached' });
+  let message = '';
+  try {
+    await captureFromTab({ id: 7, url: 'https://smallhotel.example/rooms' }, {});
+  } catch (err) {
+    message = err.message;
+  }
+  ok('a failed injection reports the cause', /Frame was detached/.test(message), message);
+  ok('and points at right-click capture', /[Rr]ight-click/.test(message), message);
+}
+
+// A page that yields nothing is not an error — it is an empty capture.
+{
+  const { captureFromTab } = loadWorker({ injectResult: undefined });
+  const reply = await captureFromTab({ id: 7, url: 'https://smallhotel.example/rooms' }, {});
+  check('an empty injection result is handled', reply.offers, []);
+}
+
+// ---- screenshot extraction (fake client — no API call, no cost) ----------
+{
+  const { extractNotesFromImages, buildScreenshotRequest, withWindow, cleanModelText, SCREENSHOT_MODEL } =
+    await import('../src/utils/screenshotExtract.js');
+  const IMG = { mediaType: 'image/jpeg', data: 'AAAA' };
+
+  const req = buildScreenshotRequest([IMG, IMG]);
+  check('screenshot request uses the cheapest model by default', req.model, 'claude-haiku-4-5');
+  check('screenshot request uses the default model constant', req.model, SCREENSHOT_MODEL);
+  // Haiku 4.5 rejects `effort`, and refusal fallback isn't documented for it.
+  ok('a Haiku request carries no effort and no fallback',
+    !('output_config' in req) && !('fallbacks' in req) && !('betas' in req), JSON.stringify(Object.keys(req)));
+  const opusReq = buildScreenshotRequest([IMG], { model: 'claude-opus-5-5' });
+  check('an Opus override opts into refusal fallback', [opusReq.fallbacks, opusReq.betas], ['default', ['server-side-fallback-2026-07-01']]);
+  const blocks = req.messages[0].content;
+  check('every screenshot becomes an image block, prompt last', blocks.map((b) => b.type), ['image', 'image', 'text']);
+  check('image blocks carry base64 source', blocks[0].source, { type: 'base64', media_type: 'image/jpeg', data: 'AAAA' });
+
+  check('code fences around the reply are stripped', cleanModelText('```\nFLIGHT: A to B, €1\n```'), 'FLIGHT: A to B, €1');
+  check('a window label wraps the lines', withWindow('HOTEL: Paris - room, €200/night x3', '21-24 Oct'),
+    'WINDOW: 21-24 Oct\nHOTEL: Paris - room, €200/night x3\nWINDOW:');
+  check('no window label leaves the lines alone', withWindow('NOTE: x', ''), 'NOTE: x');
+
+  let sent = null;
+  const fakeClient = (response) => ({ beta: { messages: { create: async (body) => { sent = body; return response; } } } });
+  const reply = 'FLIGHT: NYC to PAR, 18:30-07:45, USD612, Air France\nHOTEL: Paris - Le Marais room, USD280/night x3, Amex FHR';
+  const result = await extractNotesFromImages([IMG], {
+    client: fakeClient({ stop_reason: 'end_turn', model: SCREENSHOT_MODEL, content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: reply }] }),
+  });
+  check('only the text block is read, not thinking', result.notes, reply);
+  ok('the image actually reaches the request', sent && sent.messages[0].content[0].type === 'image');
+  const staged = offersFromNotesText(withWindow(result.notes, '21-24 Oct'), { source: 'screenshot' }).offers;
+  check('a screenshot reply stages one flight and one stay', staged.map((o) => o.category), ['travel', 'stay']);
+  check('a dollar fare from a screenshot keeps its currency', staged[0].price, { low: 612, high: 612, currency: 'USD' });
+  check('a screenshot reply keeps its window', staged.map((o) => o.window), ['21-24 Oct', '21-24 Oct']);
+
+  let refusal = '';
+  try {
+    await extractNotesFromImages([IMG], { client: fakeClient({ stop_reason: 'refusal', stop_details: { category: 'cyber' }, content: [] }) });
+  } catch (err) { refusal = err.message; }
+  ok('a refusal is reported, not treated as an empty capture', /declined/.test(refusal), refusal);
+
+  let empty = '';
+  try { await extractNotesFromImages([], {}); } catch (err) { empty = err.message; }
+  ok('no screenshots is refused before any API call', /No screenshots/.test(empty), empty);
+  let badType = '';
+  try { await extractNotesFromImages([{ mediaType: 'image/heic', data: 'x' }], { client: fakeClient({}) }); } catch (err) { badType = err.message; }
+  ok('an unsupported image type is refused before any API call', /not a supported image type/.test(badType), badType);
+}
+
+// ---- Capital One result cards, as the page really renders them ------------
+{
+  const cards = [
+    '5:30 PM\n7h 15m\n5:45 AM\n$1,062\nDelta\nDelta\nJFK - CDG\nDelta Main Basic\nNonstop\nEarn 5X miles on flights',
+    '6:30 PM\n7h 15m\n6:45 AM\n$1,062\nDelta\nDelta\nJFK - CDG\nDelta Main Basic\nNonstop\nEarn 5X miles on flights',
+    '2:00 AM\n7h 5m\n2:05 PM\n$1,062\nAir France\nAir France\nJFK - CDG\nLight\nNonstop\nEarn 5X miles on flights',
+  ];
+  // innerText (line breaks kept) is what a browser gives; textContent may not be.
+  const nodes = cards.map((t) => ({ innerText: t, textContent: t.replace(/\n/g, '') }));
+  const doc = { querySelectorAll: (sel) => (sel === 'li' ? nodes : []) };
+  const got = scrapers.scrape(doc, 'https://travel.capitalone.com/flights/shop/?origin=NYC&destination=PAR', null);
+  check('all three result cards are captured', got.length, 3);
+  check('the leg is the city pair, from the card\'s own airports', [got[0].from, got[0].to], ['NYC', 'PAR']);
+  ok('the exact airports are kept in the detail', /airports: JFK → CDG/.test(got[0].detail), got[0].detail);
+  check('the airline printed twice is read once', [got[0].carrier, got[2].carrier], ['Delta', 'Air France']);
+  check('times and duration', [got[0].departure, got[0].arrival, got[0].duration], ['5:30 PM', '5:45 AM', '7h 15m']);
+  check('a comma price keeps its dollar sign', got[0].price, '$1,062');
+  check('nonstop is zero stops', got[0].stops, 0);
+  ok('the fare name is kept (Basic fares have restrictions)', /fare: Delta Main Basic/.test(got[0].detail) && /fare: Light/.test(got[2].detail), got[0].detail + ' | ' + got[2].detail);
+  ok('an overnight arrival is flagged', /arrives next day/.test(got[0].detail) && !/arrives next day/.test(got[2].detail), got[0].detail + ' | ' + got[2].detail);
+  ok('"Earn 5X miles" is a perk, never a points price', !/points/.test(got[0].detail) && got[0].price === '$1,062');
+  const normalized = normalizeOffers(got, {});
+  check('they normalize to one route group with dollar prices', [new Set(normalized.map((o) => o.group)).size, normalized[0].price.currency], [1, 'USD']);
+
+  const longCard = [{ innerText: '12:25 AM\n28h\n9:25 AM\n$735\nTAP\nTAP\nEWR - ORY\nDiscount\n1 stop\nEarn 5X miles on flights', textContent: '' }];
+  const gotLong = scrapers.scrape({ querySelectorAll: (sel) => (sel === 'li' ? longCard : []) }, 'https://travel.capitalone.com/flights/shop/', null);
+  ok('a 28-hour journey is flagged as arriving a day or more later (clocks alone can\'t say)', gotLong.length === 1 && /long journey \(28h\)/.test(gotLong[0].detail) && !/arrives next day/.test(gotLong[0].detail) && gotLong[0].stops === 1 && gotLong[0].carrier === 'TAP', JSON.stringify(gotLong));
+
+  // The same cards if only textContent exists and elements ran together.
+  const glued = cards.map((t) => ({ textContent: t.replace(/\n/g, ' ') }));
+  const gotGlued = scrapers.scrape({ querySelectorAll: (sel) => (sel === 'li' ? glued : []) }, 'https://travel.capitalone.com/flights/shop/', null);
+  // The phone layout (price + perk banner first, route last), mixed airports.
+  const phone = [
+    ['Earn 5X miles on flights', '$759', 'Best Price, Best Overall', '11:00 PM', '7h 10m', '11:10 AM', 'French bee', 'Bee Light', 'Nonstop', 'EWR - ORY'],
+    ['Earn 5X miles on flights', '$1,062', 'Fastest, Best Quality', '6:05 PM', '7h 5m', '6:10 AM', 'Delta', 'Delta Main Basic', 'Nonstop', 'EWR - CDG'],
+    ['Earn 5X miles on flights', '$809', '11:00 PM', '7h 10m', '11:10 AM', 'Air Caraïbes', 'Eco Basic', 'Nonstop', 'EWR - ORY'],
+  ].map((l) => ({ innerText: l.join('\n'), textContent: l.join('') }));
+  const gotPhone = scrapers.scrape({ querySelectorAll: (sel) => (sel === 'li' ? phone : []) }, 'https://travel.capitalone.com/flights/shop/', null);
+  check('all three phone cards are captured', gotPhone.length, 3);
+  check('EWR-ORY and EWR-CDG are alternatives for one NYC → PAR leg',
+    new Set(gotPhone.map((o) => `${o.from} → ${o.to}`)).size, 1);
+  check('phone layout: airline and fare', gotPhone.map((o) => [o.carrier, /fare: ([^·]+)/.exec(o.detail)[1].trim()]),
+    [['French bee', 'Bee Light'], ['Delta', 'Delta Main Basic'], ['Air Caraïbes', 'Eco Basic']]);
+  check('phone layout: prices keep dollars and commas', gotPhone.map((o) => o.price), ['$759', '$1,062', '$809']);
+  ok('"Best Price" and "Earn 5X" badges are not the airline or fare', gotPhone.every((o) => !/Best|Earn|Fastest/.test(o.carrier) && !/Best Price|Earn 5X/.test(o.detail)), JSON.stringify(gotPhone.map((o) => [o.carrier, o.detail])));
+  ok('the airports are kept per result', /airports: EWR → ORY/.test(gotPhone[0].detail) && /airports: EWR → CDG/.test(gotPhone[1].detail));
+  const phoneOffers = normalizeOffers([...got, ...gotPhone], {});
+  check('desktop JFK-CDG and phone EWR-ORY results share one group', new Set(phoneOffers.map((o) => o.group)).size, 1);
+  check('a one-airport city keeps its own code', scrapers.metroOf('MUC'), 'MUC');
+
+  check('space-separated text reads the same', gotGlued.map((o) => [o.from, o.to, o.carrier, o.price]), got.map((o) => [o.from, o.to, o.carrier, o.price]));
+}
+
+// ---- per-traveler totals (only ever applied after the user has said so) -----
+{
+  const offers = normalizeOffers([
+    { kind: 'flight', from: 'NYC', to: 'PAR', price: { low: 1062, high: 1062, currency: 'USD' }, detail: 'fare: Light' },
+    { kind: 'train', from: 'PAR', to: 'LYS', price: { low: 40, high: 60, currency: 'EUR' } },
+    { kind: 'hotel', place: 'Paris', label: 'H', price: { low: 280, high: 280, currency: 'USD' } },
+    { kind: 'flight', from: 'PAR', to: 'NYC', note: 'points only' },
+  ], {});
+  const two = totalForTravelers(offers, 2);
+  check('a flight price is doubled for two', two[0].price.low, 2124);
+  ok('…and the figure as shown is kept in the detail', /USD 1062 per traveler × 2/.test(two[0].detail) && /fare: Light/.test(two[0].detail), two[0].detail);
+  check('a price range is doubled at both ends', [two[1].price.low, two[1].price.high], [80, 120]);
+  check('a hotel is not doubled', two[2].price.low, 280);
+  check('an option with no price is untouched', two[3].price, null);
+  check('one traveler changes nothing', totalForTravelers(offers, 1), offers);
+  check('no count changes nothing', totalForTravelers(offers, ''), offers);
+  check('the original offers are not mutated', offers[0].price.low, 1062);
+}
+
+// ---- pasted portal text (no AI) --------------------------------------------
+{
+  // Exactly as copied from the page: the first result is cut off at the top.
+  const pasted = `$938
+Delta
+Delta
+EWR - CDG
+Delta Main Basic
+Nonstop
+Earn 5X miles on flights
+
+
+Best Price
+12:25 AM
+28h
+9:25 AM
+$735
+TAP
+TAP
+EWR - ORY
+Discount
+1 stop
+Earn 5X miles on flights
+
+5:30 PM
+7h 15m
+5:45 AM
+$962
+Delta
+Delta
+JFK - CDG
+Delta Main Basic
+Nonstop
+Earn 5X miles on flights
+
+7:30 PM
+7h 25m
+7:55 AM
+$962
+Delta
+Delta
+JFK - CDG
+Delta Main Basic
+Nonstop`;
+  const r = parsePortalText(pasted);
+  check('three complete results are read', r.found, 3);
+  check('the result cut off at the top is skipped and counted, not guessed', r.skipped, 1);
+  const [tap, d1, d2] = r.offers;
+  check('the one-stop TAP result', [tap.carrier, tap.price, tap.stops, tap.duration, tap.departure, tap.arrival], ['TAP', '$735', 1, '28h', '12:25 AM', '9:25 AM']);
+  ok('its airports are kept and the long journey is flagged', /airports: EWR → ORY/.test(tap.detail) && /fare: Discount/.test(tap.detail) && /long journey \(28h\)/.test(tap.detail), tap.detail);
+  check('a Delta nonstop', [d1.carrier, d1.price, d1.stops, d1.from, d1.to], ['Delta', '$962', 0, 'NYC', 'PAR']);
+  ok('the airline printed twice is read once; fare name kept', /fare: Delta Main Basic/.test(d1.detail) && d1.carrier === 'Delta', d1.detail);
+  ok('an overnight arrival is flagged', /arrives next day/.test(d1.detail) && /arrives next day/.test(d2.detail));
+  ok('"Best Price" and "Earn 5X miles" never become data', r.offers.every((o) => !/Best|Earn/.test(o.carrier + o.detail)));
+  const staged = normalizeOffers(r.offers, { source: 'pasted' });
+  check('all three become alternatives for one NYC → PAR leg, in dollars', [new Set(staged.map((o) => o.group)).size, staged[0].group, staged[0].price.currency], [1, 'NYC → PAR', 'USD']);
+  check('the prices are exactly as shown (no per-traveler guess)', staged.map((o) => o.price.low), [735, 962, 962]);
+
+  // The earlier desktop paste: the last result is cut off after its price.
+  const earlier = `5:30 PM\n7h 15m\n5:45 AM\n$1,062\nDelta\nDelta\nJFK - CDG\nDelta Main Basic\nNonstop\nEarn 5X miles on flights\n\n6:30 PM\n7h 15m\n6:45 AM\n$1,062\nDelta\nDelta\nJFK - CDG\nDelta Main Basic\nNonstop\nEarn 5X miles on flights\n\n2:00 AM\n7h 5m\n2:05 PM\n$1,062\nAir France\nAir France\nJFK - CDG\nLight\nNonstop\nEarn 5X miles on flights\n\n10:30 PM\n7h 20m\n10:50 AM\n$1,062`;
+  const e = parsePortalText(earlier);
+  check('desktop paste: three read, the cut-off fourth skipped', [e.found, e.skipped], [3, 1]);
+  check('…with the right airlines and fares', e.offers.map((o) => o.carrier), ['Delta', 'Delta', 'Air France']);
+
+  // The phone layout, pasted as flat text (price + perk first, route last).
+  const phone = ['Book a flight', 'Done', 'New York City, New York (3 Airpor…', 'Oct 28 - Oct 31', 'All', 'Basic', 'Standard', 'Enhanced', 'Prem',
+    'Earn 5X miles on flights', '$759', 'Best Price, Best Overall', '11:00 PM', '7h 10m', '11:10 AM', 'French bee', 'Bee Light', 'Nonstop', 'EWR - ORY',
+    'Earn 5X miles on flights', '$1,062', 'Fastest, Best Quality', '6:05 PM', '7h 5m', '6:10 AM', 'Delta', 'Delta Main Basic', 'Nonstop', 'EWR - CDG',
+    'Earn 5X miles on flights', '$809', '11:00 PM', '7h 10m', '11:10 AM', 'Air Caraïbes', 'Eco Basic', 'Nonstop', 'EWR - ORY',
+    'Earn 5X miles on flights', 'Sort & filter'].join('\n');
+  const p = parsePortalText(phone);
+  check('phone layout: three results, nothing skipped', [p.found, p.skipped], [3, 0]);
+  check('phone layout: each price goes with ITS flight', p.offers.map((o) => [o.carrier, o.price]), [['French bee', '$759'], ['Delta', '$1,062'], ['Air Caraïbes', '$809']]);
+  check('phone layout: fares and legs', p.offers.map((o) => [/fare: ([^·]+)/.exec(o.detail)[1].trim(), `${o.from} → ${o.to}`]), [['Bee Light', 'NYC → PAR'], ['Delta Main Basic', 'NYC → PAR'], ['Eco Basic', 'NYC → PAR']]);
+  check('the trip dates above the results are offered as a window hint', p.windowHint, 'Oct 28 - Oct 31');
+
+  // Not flight results: nothing is invented.
+  check('unrelated text yields nothing', parsePortalText('Hello\nThis is a hotel page\n$200 per night').found, 0);
+  check('empty input yields nothing', parsePortalText('').found, 0);
+  const noRoute = parsePortalText('5:30 PM\n7h 15m\n5:45 AM\n$962\nDelta\nNonstop');
+  check('a result with no airports is skipped, not given a made-up route', [noRoute.found, noRoute.skipped], [0, 1]);
+  const points = parsePortalText('5:30 PM\n7h 15m\n5:45 AM\n32,000 miles\nDelta\nJFK - CDG\nMain\nNonstop');
+  ok('a points-only fare has no cash price and says so', points.found === 1 && points.offers[0].price === null && /points/.test(points.offers[0].detail), JSON.stringify(points.offers));
+  const plus = parsePortalText('10:30 PM\n9h 5m\n12:35 PM +1\n$800\nLufthansa\nJFK - FRA\nLight\nNonstop');
+  ok('an explicit "+1" arrival is honoured', /arrives \+1 day/.test(plus.offers[0].detail) && plus.offers[0].arrival === '12:35 PM', JSON.stringify(plus.offers));
+
+  // The extension and this reader must agree on which airports are one city.
+  const extSource = readFileSync(new URL('../extension/scrapers.js', import.meta.url), 'utf8');
+  const metroBlock = extSource.slice(extSource.indexOf('var METRO = {'), extSource.indexOf('function metroOf'));
+  check('the extension and the planner list the same number of airports', (metroBlock.match(/[A-Z]{3}: '[A-Z]{3}'/g) || []).length, Object.keys(PASTE_METRO).length);
+  ok('…and map every one to the same city', Object.keys(PASTE_METRO).every((code) => scrapers.metroOf(code) === PASTE_METRO[code]));
+  check('an unlisted airport keeps its own code', [pasteMetroOf('MUC'), scrapers.metroOf('MUC')], ['MUC', 'MUC']);
+}
+
+// ---- input cards: validation and the spoken-sentence reader -----------------
+{
+  check('a city name becomes its city code', normalizeLeg('New York'), { code: 'NYC', airport: '' });
+  check('an airport becomes its city, remembered', normalizeLeg('ewr'), { code: 'NYC', airport: 'EWR' });
+  check('an unknown place is kept as typed', normalizeLeg('Lyon'), { code: 'Lyon', airport: '' });
+  check('blank is blank', normalizeLeg('  '), { code: '', airport: '' });
+  check('clock: 6:30 pm', readClock('6:30 pm'), '18:30');
+  check('clock: 6pm', readClock('6pm'), '18:00');
+  check('clock: 6.30pm', readClock('6.30pm'), '18:30');
+  check('clock: 24h', readClock('07:45'), '07:45');
+  check('clock: nonsense is empty, not a made-up time', readClock('soon'), '');
+
+  const flight = { ...emptyCard('flight'), from: 'New York', to: 'JFK', depart: '6:30 pm', arrive: '7:45 am', carrier: 'Air France', fare: 'Main Basic', price: '1,062', currency: 'USD', basis: 'per_traveler', travelers: '2' };
+  // from and to resolving to the same city is refused...
+  ok('the same city twice is refused', buildOfferFromCard('flight', { ...flight, to: 'New York' }).errors.some((e) => e.field === 'to'));
+  const good = buildOfferFromCard('flight', { ...flight, to: 'Paris' });
+  check('a complete flight card has no errors', good.errors, []);
+  check('the raw offer uses city codes', [good.raw.from, good.raw.to], ['NYC', 'PAR']);
+  check('the price is exactly as typed (commas dropped)', good.raw.price, { amount: 1062, currency: 'USD' });
+  check('per traveler carries its count out', good.travelers, '2');
+  ok('the fare is kept in the detail', /fare: Main Basic/.test(good.raw.detail), good.raw.detail);
+  const cardOffers = normalizeOffers([good.raw], { source: 'card' });
+  check('it normalizes to one NYC → PAR flight in dollars', [cardOffers[0].group, cardOffers[0].price.currency, cardOffers[0].departure], ['NYC → PAR', 'USD', '18:30']);
+  check('and the planner totals it for two', totalForTravelers(cardOffers, good.travelers)[0].price.low, 2124);
+  const withAirport = buildOfferFromCard('flight', { ...flight, from: 'EWR', to: 'ORY' });
+  ok('typed airports are kept in the detail while the leg is the city pair', /airports: EWR → ORY/.test(withAirport.raw.detail) && withAirport.raw.from === 'NYC' && withAirport.raw.to === 'PAR', withAirport.raw.detail);
+
+  const fields = (kind, v) => buildOfferFromCard(kind, v).errors.map((e) => e.field).sort();
+  check('a price with no currency is refused (no default)', fields('flight', { ...flight, to: 'Paris', currency: '' }), ['currency']);
+  check('a flight price with no per-traveler answer is refused', fields('flight', { ...flight, to: 'Paris', basis: '' }), ['basis']);
+  check('per traveler with no count is refused', fields('flight', { ...flight, to: 'Paris', travelers: '' }), ['travelers']);
+  check('zero travelers is refused', fields('flight', { ...flight, to: 'Paris', travelers: '0' }), ['travelers']);
+  check('"total" needs no count', fields('flight', { ...flight, to: 'Paris', basis: 'total', travelers: '' }), []);
+  check('a bad time is refused', fields('flight', { ...flight, to: 'Paris', depart: 'soon' }), ['depart']);
+  check('a non-number price is refused', fields('flight', { ...flight, to: 'Paris', price: 'cheap' }), ['price']);
+  check('a negative price is refused', fields('flight', { ...flight, to: 'Paris', price: '-5' }), ['price']);
+  check('missing route is refused', fields('flight', { ...emptyCard('flight') }), ['from', 'to']);
+  check('no price needs no currency or answer (a points fare can still be added)', fields('flight', { ...emptyCard('flight'), from: 'NYC', to: 'PAR', note: '45,000 points' }), []);
+  check('a train works the same way', fields('train', { ...emptyCard('train'), from: 'Paris', to: 'Lyon', price: '40', currency: 'EUR', basis: 'total' }), []);
+
+  const hotel = { ...emptyCard('hotel'), place: 'Paris', name: 'Le Marais Boutique', price: '280', currency: 'USD', priceKind: 'per_night', nights: '3', note: 'Amex FHR' };
+  check('a complete hotel card has no errors', fields('hotel', hotel), []);
+  const hotelOffer = normalizeOffers([buildOfferFromCard('hotel', hotel).raw], { source: 'card' })[0];
+  check('a per-night hotel keeps its nights', [hotelOffer.group, hotelOffer.perNight, hotelOffer.nights, hotelOffer.price.low], ['Paris', true, 3, 280]);
+  check('a hotel is never asked per traveler, and never multiplied', [fields('hotel', { ...hotel, basis: '' }), totalForTravelers([hotelOffer], 2)[0].price.low], [[], 280]);
+  check('a per-night price needs nights', fields('hotel', { ...hotel, nights: '' }), ['nights']);
+  check('a hotel price needs per night or stay', fields('hotel', { ...hotel, priceKind: '' }), ['priceKind']);
+  check('a hotel needs a city', fields('hotel', { ...hotel, place: '' }), ['place']);
+  check('an activity needs a name', fields('activity', { ...emptyCard('activity') }), ['name']);
+  check('a free activity is fine', fields('activity', { ...emptyCard('activity'), name: 'Louvre late opening' }), []);
+
+  // Spoken sentences: fill what was said, decide nothing that wasn't.
+  const spoken = parseSpokenEntry('Flight from New York to Paris, leaves 6:30 pm, lands 7:45 am, Air France, 612 dollars each for two travelers', 'flight').fields;
+  check('a full sentence fills the route, times, airline and price', [spoken.from, spoken.to, spoken.depart, spoken.arrive, spoken.carrier, spoken.price, spoken.currency], ['New York', 'Paris', '6:30 pm', '7:45 am', 'Air France', '612', 'USD']);
+  check('"each" and "two travelers" fill per traveler x 2', [spoken.basis, spoken.travelers], ['per_traveler', '2']);
+  const codes = parseSpokenEntry('JFK to CDG departing 18:30 arriving 07:45 on Delta nonstop $962 in total', 'flight').fields;
+  check('airport codes, 24h times, nonstop and "in total"', [codes.from, codes.to, codes.depart, codes.arrive, codes.carrier, codes.stops, codes.price, codes.currency, codes.basis], ['JFK', 'CDG', '18:30', '07:45', 'Delta', '0', '962', 'USD', 'total']);
+  const unsure = parseSpokenEntry('flight new york to paris 612 dollars for two travelers', 'flight').fields;
+  ok('with no "each" or "total", per traveler vs total is left for the user', unsure.basis === undefined && unsure.travelers === '2' && unsure.price === '612', JSON.stringify(unsure));
+  const noCurrency = parseSpokenEntry('flight new york to paris 612', 'flight').fields;
+  ok('a bare number is not guessed to be a price or a currency', noCurrency.price === undefined && noCurrency.currency === undefined, JSON.stringify(noCurrency));
+  const both = parseSpokenEntry('flight new york to paris 500 dollars total per person', 'flight').fields;
+  ok('contradictory words decide nothing', both.basis === undefined);
+  const spokenHotel = parseSpokenEntry('Hotel Le Marais in Paris, 280 euros a night for 3 nights', 'hotel').fields;
+  check('a hotel sentence', [spokenHotel.place, spokenHotel.name, spokenHotel.price, spokenHotel.currency, spokenHotel.priceKind, spokenHotel.nights], ['Paris', 'Hotel Le Marais', '280', 'EUR', 'per_night', '3']);
+  check('an activity sentence', parseSpokenEntry('Louvre late opening, 25 euros', 'activity').fields.name, 'Louvre late opening');
+  check('nothing recognizable fills nothing', parseSpokenEntry('um well', 'flight').found, []);
+  check('empty fills nothing', parseSpokenEntry('', 'hotel').found, []);
+}
+
+// ---- source links and price age ------------------------------------------
+check('an https link is kept', safeHttpUrl(' https://travel.example.com/a?b=1 '), 'https://travel.example.com/a?b=1');
+check('a javascript: link is dropped', safeHttpUrl('javascript:alert(1)'), '');
+check('a data: link is dropped', safeHttpUrl('data:text/html,<script>1</script>'), '');
+check('a non-URL is dropped', safeHttpUrl('not a url'), '');
+check('an offer never carries a script URL', normalizeOffer({ kind: 'flight', from: 'A', to: 'B', price: { amount: 1, currency: 'USD' }, url: 'javascript:alert(1)' }).sourceUrl, '');
+const T0 = Date.parse('2026-10-12T12:00:00Z');
+check('seconds old reads as just now', capturedAgo('2026-10-12T11:59:30Z', T0), { label: 'just now', stale: false });
+check('minutes', capturedAgo('2026-10-12T11:30:00Z', T0), { label: '30 min ago', stale: false });
+check('hours', capturedAgo('2026-10-12T07:00:00Z', T0), { label: '5h ago', stale: false });
+check('a day or more is flagged for a recheck', capturedAgo('2026-10-10T12:00:00Z', T0), { label: '2d ago', stale: true });
+check('an unreadable time shows nothing rather than a guess', capturedAgo('whenever', T0), { label: '', stale: false });
+
+// ---- trip store ----------------------------------------------------------
+{
+  const mem = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), _m: m }; };
+
+  const fresh = loadStore(mem(), 1000);
+  ok('a new user gets one trip that starts as the example (null snapshot)', fresh.trips.length === 1 && fresh.trips[0].snapshot === null && fresh.activeId === fresh.trips[0].id);
+
+  const legacyStorage = mem();
+  const legacySnap = { version: 1, notesText: 'x', rows: [{ id: 'r1' }], notes: [], rateRows: [] };
+  legacyStorage.setItem(LEGACY_KEY, JSON.stringify(legacySnap));
+  const migrated = loadStore(legacyStorage, 1000);
+  ok('an existing single-trip save becomes the first trip, unchanged', migrated.trips.length === 1 && migrated.trips[0].snapshot.rows[0].id === 'r1');
+  ok('migration leaves the old key in place (nothing is destroyed)', legacyStorage.getItem(LEGACY_KEY) !== null);
+
+  const storage = mem();
+  saveStore(storage, migrated);
+  ok('a saved store round-trips', JSON.stringify(loadStore(storage)) === JSON.stringify(migrated));
+  storage.setItem(STORE_KEY, '{not json');
+  ok('a corrupt store falls back instead of throwing', loadStore(storage, 1).trips.length === 1);
+
+  const a = migrated.trips[0];
+  const same = setSnapshot(migrated, a.id, JSON.parse(JSON.stringify(legacySnap)), 5000);
+  ok('reporting an unchanged snapshot does not mark the trip edited', same === migrated);
+  const edited = setSnapshot(migrated, a.id, { ...legacySnap, notesText: 'y' }, 5000);
+  ok('a real change bumps updatedAt and makes the trip unsynced', edited.trips[0].updatedAt === 5000 && isDirty(edited.trips[0]));
+  const synced = markSynced(edited, a.id, 5000);
+  ok('markSynced clears the unsynced state', !isDirty(synced.trips[0]));
+  ok('markSynced ignores a stale push (edited while it was in flight)', isDirty(markSynced(setSnapshot(edited, a.id, { ...legacySnap, notesText: 'z' }, 6000), a.id, 5000).trips[0]));
+
+  ok('rename updates title and updatedAt', renameTrip(synced, a.id, '  Paris  ', 7000).trips[0].title === 'Paris' && isDirty(renameTrip(synced, a.id, 'Paris', 7000).trips[0]));
+  ok('renaming to blank or the same title is a no-op', renameTrip(synced, a.id, '   ') === synced && renameTrip(synced, a.id, a.title) === synced);
+
+  const two = addTrip(synced, makeTrip('Rome', emptySnapshot(), 8000));
+  ok('a new trip is added and opened', two.trips.length === 2 && two.activeId === two.trips[1].id);
+  ok('selecting an unknown trip is ignored', selectTrip(two, 'nope') === two);
+
+  const removed = removeTrip(two, two.trips[1].id);
+  ok('deleting the open trip opens another and remembers the deletion', removed.trips.length === 1 && removed.activeId === a.id && removed.deletedIds.includes(two.trips[1].id));
+  ok('forgetDeleted drops the tombstone', forgetDeleted(removed, two.trips[1].id).deletedIds.length === 0);
+  const last = removeTrip(removed, a.id);
+  ok('deleting the last trip leaves a fresh empty one, never zero', last.trips.length === 1 && last.trips[0].id !== a.id && last.trips[0].snapshot.rows.length === 0);
+
+  const remote = { id: 'tclaude123', title: 'Lisbon', createdAt: 100, updatedAt: 200, snapshot: null };
+  const adopted = adoptRemoteTrip(synced, remote);
+  ok('a server trip with no snapshot is adopted as an empty trip (not the example)', adopted.trips.length === 2 && adopted.trips[1].snapshot.rows.length === 0 && !isDirty(adopted.trips[1]));
+  ok('adopting does not change which trip is open', adopted.activeId === synced.activeId);
+  ok('adopting twice does not duplicate', adoptRemoteTrip(adopted, remote).trips.length === 2);
+  const pulled = replaceFromRemote(adopted, { ...remote, title: 'Lisbon 2', updatedAt: 900, snapshot: { ...emptySnapshot(), notesText: 'from elsewhere' } });
+  ok('a newer server copy replaces the local one and is in sync', pulled.trips[1].title === 'Lisbon 2' && pulled.trips[1].snapshot.notesText === 'from elsewhere' && !isDirty(pulled.trips[1]));
+  ok('a server copy with no usable snapshot never overwrites', replaceFromRemote(adopted, { ...remote, snapshot: null }) === adopted);
+}
+
+// ---- report --------------------------------------------------------------
+if (failures.length) {
+  console.error(`\n✗ ${failures.length} failed, ${passed} passed\n`);
+  failures.forEach((f) => console.error(`  ✗ ${f}`));
+  process.exit(1);
+}
+console.error(`✓ ${passed} assertions passed`);

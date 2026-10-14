@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>TripAgent Capture</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <h1>TripAgent Capture</h1>
+    <p class="hint" id="subtitle">Works on whatever page you have open — right-click a price, or hit Capture below. Known travel sites are picked up automatically.</p>
+  </header>
+
+  <!-- TripAgent: where captures go. Set once; the planner fills it in if it is open. -->
+  <section class="section" id="server-section">
+    <h2>TripAgent</h2>
+    <div id="server-on" hidden>
+      <p class="hint" id="server-on-text">Captures go to the trip open in your planner.</p>
+      <div class="btn-row"><button id="server-change-btn" class="btn -ghost">Change</button></div>
+    </div>
+    <div id="server-off">
+      <p class="hint">Paste your TripAgent URL once and captures reach your planner from any device \u2014 no planner tab needed. Opening the planner with TripAgent connected fills this in for you.</p>
+      <div class="overrides"><label style="flex:1">URL <input id="server-url" placeholder="https://\u2026workers.dev/mcp/\u2026" style="width:100%" /></label></div>
+      <div class="btn-row"><button id="server-save-btn" class="btn -primary">Save</button></div>
+    </div>
+  </section>
+
+  <!-- Bank-portal prices: ask, never guess, whether they are per traveler -->
+  <section class="section" id="pricing-section" hidden>
+    <h2>Confirm prices</h2>
+    <p class="hint">Capital One and Amex don\u2019t say whether a flight price is per traveler or for everyone. Tell us, and these are sent.</p>
+    <div id="pricing-list"></div>
+  </section>
+
+  <!-- Selection captures: free-form text, reviewed by hand -->
+  <section class="section">
+    <h2>Selected prices</h2>
+    <div id="empty-state" class="empty" hidden>
+      No captures yet. Select price text on a page, right-click, and pick <strong>“Add to Trip Planner”</strong>.
+    </div>
+    <ul id="capture-list"></ul>
+    <div class="btn-row">
+      <button id="copy-btn" class="btn -primary">Copy as trip notes</button>
+      <button id="send-notes-btn" class="btn">Send to planner</button>
+      <button id="clear-btn" class="btn -ghost">Clear</button>
+    </div>
+  </section>
+
+  <!-- Scraped offers: structured rows from a supported site -->
+  <section class="section">
+    <h2>Scraped offers</h2>
+    <p class="hint">Capture reads the page you're on, whatever site it is.</p>
+    <div class="overrides">
+      <label>From <input id="from" placeholder="IST" maxlength="4" /></label>
+      <label>To <input id="to" placeholder="MUC" maxlength="4" /></label>
+      <label>Window <input id="window" placeholder="14-19 Aug" /></label>
+    </div>
+    <p class="hint">Overrides fill in what a page URL doesn’t say, and are saved for next time.</p>
+    <div id="offers-empty" class="empty" hidden>
+      Nothing scraped yet. Open any flight or hotel search and hit <strong>Capture this page</strong>.
+    </div>
+    <ul id="offer-list"></ul>
+    <div class="btn-row">
+      <button id="capture-btn" class="btn -primary">Capture this page</button>
+      <button id="send-offers-btn" class="btn">Send to planner</button>
+      <button id="clear-offers-btn" class="btn -ghost">Clear</button>
+    </div>
+  </section>
+
+  <footer>
+    <div id="status" class="status" hidden></div>
+  </footer>
+
+  <script src="lib/capture.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

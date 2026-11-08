@@ -138,6 +138,16 @@ enum TextParsers {
                 label = String(rest[..<comma.lowerBound])
             }
         }
+        if price.isEmpty {
+            // Inline activities carry no comma: "[id] Colosseum tour $90" / "[id] Food walk no cash price".
+            if rest.hasSuffix(" no cash price") {
+                price = "no cash price"
+                label = String(rest.dropLast(" no cash price".count))
+            } else if let space = rest.range(of: " ", options: .backwards), let first = rest[space.upperBound...].first, "$€£₺".contains(first) {
+                price = String(rest[space.upperBound...])
+                label = String(rest[..<space.lowerBound])
+            }
+        }
         return PlanOption(id: id, picked: picked, label: label, price: price, window: window, detail: detail)
     }
 

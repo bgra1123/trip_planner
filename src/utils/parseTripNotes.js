@@ -1,3 +1,5 @@
+import { cabinFromFare } from './fareClass.js';
+
 const TAGS = {
   travel: ['flight', 'train', 'bus', 'car', 'ferry', 'transport', 'travel'],
   stay: ['hotel', 'stay', 'airbnb', 'accommodation', 'apartment'],
@@ -299,7 +301,7 @@ export function bumpRowIdCounter(ids) {
   });
 }
 export function newRow(category = 'travel') {
-  return { id: newRowId(), category, group: '', option: '', timeText: '', costText: '', detail: '', window: '' };
+  return { id: newRowId(), category, group: '', option: '', timeText: '', costText: '', detail: '', window: '', source: '', fare: '', cabin: '' };
 }
 
 // One-time conversion of pasted/typed shorthand text into editable table
@@ -323,6 +325,9 @@ export function linesToRows(text) {
       costText: costText(e.cost),
       detail: e.detail || '',
       window: e.window || '',
+      source: '',
+      fare: '',
+      cabin: '',
     });
   });
   return { rows, notes, rates };
@@ -343,6 +348,12 @@ export function groupRows(rows, notes = [], rates = {}) {
       cost: parseCost(r.costText || ''),
       detail: r.detail || '',
       window: r.window || '',
+      // Portal, fare and cabin ride along so the path, the comparison and
+      // the preferences can read them.
+      source: r.source || '',
+      fare: r.fare || '',
+      cabin: r.cabin || '',
+      sourceUrl: r.sourceUrl || '',
       raw: '',
     }));
   return { ...groupEntries(entries), notes, rates };
@@ -442,11 +453,11 @@ export function buildExportData(parsed, selection, route) {
   const rates = parsed.rates || {};
   const travelPicks = parsed.travel.map((g) => {
     const o = pickedOption(g, selection.travel);
-    return { leg: g.key, option: o.label, departure: o.time.from, arrival: o.time.to, cost: o.cost, window: o.window || null, detail: o.detail || null };
+    return { leg: g.key, option: o.label, departure: o.time.from, arrival: o.time.to, cost: o.cost, window: o.window || null, detail: o.detail || null, source: o.source || null, fare: o.fare || null, cabin: o.cabin || null };
   });
   const stayPicks = parsed.stay.map((g) => {
     const o = pickedOption(g, selection.stay);
-    return { place: g.key, option: o.label, cost: o.cost, window: o.window || null, nights: o.cost ? o.cost.nights : 1, detail: o.detail || null };
+    return { place: g.key, option: o.label, cost: o.cost, window: o.window || null, nights: o.cost ? o.cost.nights : 1, detail: o.detail || null, source: o.source || null };
   });
   const activityList = parsed.activities.map((a) => ({ name: a.label, cost: a.cost, included: !!selection.activity[a.idx] }));
 
@@ -590,6 +601,28 @@ export function toMarkdown(data) {
   }
 
   return lines.join('\n');
+}
+
+// Rows saved before portal, fare and cabin were columns carried them as text in
+// the detail ("fare: Main Basic · via Capital One Travel"). Lift them out once,
+// so old trips get the columns without anyone retyping; a row that already has
+// the fields is left alone.
+export function migrateRowFields(row) {
+  if (!row || typeof row !== 'object') return row;
+  const out = { source: '', fare: '', cabin: '', ...row };
+  let detail = String(out.detail || '');
+  const take = (re, field) => {
+    const m = detail.match(re);
+    if (m && !out[field]) {
+      out[field] = m[1].trim();
+      detail = detail.replace(m[0], '').replace(/\s*·\s*·\s*/g, ' · ').replace(/^\s*·\s*|\s*·\s*$/g, '').trim();
+    }
+  };
+  if (out.category === 'travel') take(/(?:^|\s·\s)fare:\s*([^·]+)/, 'fare');
+  take(/(?:^|\s·\s)via\s+([^·]+)/, 'source');
+  out.detail = detail;
+  if (out.category === 'travel' && !out.cabin && out.fare) out.cabin = cabinFromFare(out.fare);
+  return out;
 }
 
 export const DEFAULT_TRIP_NOTES = `RATE: TRY 0.01814

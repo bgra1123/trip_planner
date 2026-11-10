@@ -55,8 +55,8 @@ function snapshotFrom(rawOffers, extra = {}) {
   return { version: 1, notesText: '', rows, notes: [], rateRows: [{ code: 'USD', factor: '0.9' }], selection: { travel: {}, stay: {}, activity: {} }, activeWindow: '', ...extra };
 }
 const PLAN = [
-  { kind: 'flight', from: 'NYC', to: 'PAR', departure: '18:30', arrival: '07:45', carrier: 'Air France', price: { amount: 612, currency: 'USD' } },
-  { kind: 'flight', from: 'NYC', to: 'PAR', departure: '22:10', arrival: '11:30', carrier: 'Delta', price: { amount: 548, currency: 'USD' } },
+  { kind: 'flight', from: 'NYC', to: 'PAR', departure: '18:30', arrival: '07:45', carrier: 'Air France', fare: 'Light', price: { amount: 612, currency: 'USD' }, source: 'Capital One Travel' },
+  { kind: 'flight', from: 'NYC', to: 'PAR', departure: '22:10', arrival: '11:30', carrier: 'Delta', fare: 'Premium Economy', price: { amount: 548, currency: 'USD' }, source: 'Amex Travel' },
   { kind: 'flight', from: 'PAR', to: 'NYC', departure: '10:00', arrival: '12:30', carrier: 'Delta', price: { amount: 400, currency: 'USD' } },
   { kind: 'hotel', place: 'Paris', label: 'Hotel A', price: { amount: 200, currency: 'USD' } },
   { kind: 'hotel', place: 'Paris', label: 'Hotel B', price: { amount: 340, currency: 'USD' } },
@@ -198,6 +198,19 @@ const PLAN = [
   ok('nothing valid is an error result', (await callTool(env, 'add_trip_options', { price_basis: 'total', options: [{ kind: 'flight', price: 1 }] })).body.result.isError === true);
   ok('no options is an error result', (await callTool(env, 'add_trip_options', { price_basis: 'total', options: [] })).body.result.isError === true);
 
+  // Fare and cabin are fields, and the cabin is read from the fare name.
+  const fared = await callTool(env, 'add_trip_options', { price_basis: 'total', options: [
+    { kind: 'flight', from: 'NYC', to: 'BCN', price: 400, currency: 'USD', fare: 'Eco Fly' },
+    { kind: 'flight', from: 'NYC', to: 'BCN', price: 900, currency: 'USD', fare: 'Business Flex', cabin: 'business' },
+  ] });
+  const eco = pendingOf(env, id).find((o) => o.group === 'NYC → BCN' && o.price.low === 400);
+  const biz = pendingOf(env, id).find((o) => o.group === 'NYC → BCN' && o.price.low === 900);
+  ok('a fare name is kept and its cabin read', eco && eco.fare === 'Eco Fly' && eco.cabin === 'economy', JSON.stringify(eco));
+  ok('a given cabin is kept', biz && biz.cabin === 'business' && biz.fare === 'Business Flex');
+  ok('the reply shows fare and cabin', /\[Eco Fly · Economy\]/.test(text(fared)) && /\[Business Flex · Business\]/.test(text(fared)), text(fared));
+  const refared = await callTool(env, 'update_trip_option', { optionId: eco.id, changes: { fare: 'Premium Economy' } });
+  ok('the fare can be corrected and the cabin follows', !refared.body.result.isError && pendingOf(env, id).some((o) => o.group === 'NYC → BCN' && o.fare === 'Premium Economy' && o.cabin === 'premium_economy'), text(refared));
+
   // A link back to the result, web links only.
   const withUrl = await callTool(env, 'add_trip_options', { price_basis: 'total', options: [
     { kind: 'flight', from: 'NYC', to: 'LIS', price: 300, currency: 'USD', url: 'https://travel.example.com/flights/123?x=1' },
@@ -212,7 +225,7 @@ const PLAN = [
 
   // Spoken correction: "the Air France flight is actually $640, departs 19:00".
   const listed = text(await callTool(env, 'list_pending_options', {}));
-  ok('list shows ids and what is waiting', /6 options waiting/.test(listed) && /Air France/.test(listed), listed);
+  ok('list shows ids and what is waiting', /8 options waiting/.test(listed) && /Air France/.test(listed), listed);
   const afId = stored.find((o) => o.carrier === 'Air France').id;
   ok('the id in the list matches storage', listed.includes(`[${afId}]`));
   const upd = await callTool(env, 'update_trip_option', { optionId: afId, changes: { price: 640, departure: '19:00' } });
@@ -221,7 +234,7 @@ const PLAN = [
   const after = pendingOf(env, id);
   const af2 = after.find((o) => o.carrier === 'Air France');
   ok('price and time changed; currency, route, window kept', af2 && af2.price.low === 640 && af2.price.currency === 'USD' && af2.departure === '19:00' && af2.arrival === '07:45' && af2.group === 'NYC → PAR' && af2.window === '21-24 Oct', JSON.stringify(af2));
-  ok('an update replaces, not duplicates', after.length === 6);
+  ok('an update replaces, not duplicates', after.length === 8);
   ok('the old id is gone and a new one is reported', !after.some((o) => o.id === afId) && updMsg.includes(`[${af2.id}]`));
   const stale = await callTool(env, 'update_trip_option', { optionId: afId, changes: { price: 1 } });
   ok('updating a stale id is an error, not a silent no-op', stale.body.result.isError && /No option/.test(text(stale)));
@@ -355,6 +368,13 @@ const PLAN = [
   const cheapest = (opt.match(/^1\.[^\n]*/m) || [''])[0];
   ok('the cheapest pairs the Delta flight with Hotel A', /Delta/.test(cheapest) && /Hotel A/.test(cheapest), cheapest);
   ok('limit is respected', (opt.match(/^\d+\./gm) || []).length <= 3);
+  ok('the path shows fare, cabin and portal', /Light · Economy · via Capital One Travel/.test(path) && /Premium Economy · Premium economy · via Amex Travel/.test(path), path);
+  const econ = text(await callTool(env, 'optimize_trip', { limit: 3, cabin: 'economy' }));
+  ok('ranking by cabin leaves out the premium fare and says so', /^1\.[^\n]*Air France/m.test(econ) && /1 option left out by the preferences given \(cabin Economy\)/.test(econ), econ);
+  const noBasic = text(await callTool(env, 'optimize_trip', { limit: 3, avoid_basic: true }));
+  ok('ranking without basic fares leaves out Light', /^1\.[^\n]*Delta/m.test(noBasic) && /left out by the preferences given \(no basic fares\)/.test(noBasic), noBasic);
+  const amex = text(await callTool(env, 'optimize_trip', { limit: 3, portal: 'Amex Travel' }));
+  ok('ranking by portal keeps a leg with no fitting option whole', /^1\./m.test(amex) && /left out by the preferences given \(portal Amex Travel\)/.test(amex), amex);
 
   await api(env, 'PUT', '/trips/emptyTrip01', { title: 'Empty', snapshot: snapshotFrom([]) });
   const empty = await callTool(env, 'get_trip_path', { tripId: 'emptyTrip01' });

@@ -155,6 +155,16 @@ link back to the page it came from when Claude knows it, and the review list
 shows how old each price is, flagging anything over a day: portal fares move, so
 recheck before you rely on an old one.
 
+**Fares, cabins and portals.** Every option keeps the portal it was priced on
+(its *source*), the fare name as printed ("Delta Main Basic", "Eco Fly",
+"Premium Economy") and the cabin read from that name (economy, premium economy,
+business, first; editable in the planner's table). Claude records the fare in
+its own field rather than the note. In the planner, the **Preferences** block
+narrows the comparison to chosen cabins or portals, or leaves out basic fares;
+a picked option that doesn't fit is flagged, never changed, and an option with
+no cabin or portal recorded is never left out. Claude can rank the same way:
+*"rank my Paris options, economy only, no basic fares"* or *"only Amex"*.
+
 **Searching public options.** Add the travel connectors you want in Claude's
 Settings → Connectors, then ask in plain words. Claude searches, records the
 results with the search's name as the source, and tells you they're waiting in

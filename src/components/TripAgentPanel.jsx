@@ -5,6 +5,7 @@ import { costTextIssue } from '../utils/parseTripNotes.js';
 import { extractNotesFromImages, withWindow } from '../utils/screenshotExtract.js';
 import { parsePortalText } from '../utils/pasteResults.js';
 import EntryCards from './EntryCards';
+import { CABIN_LABEL } from '../utils/fareClass.js';
 import { imageFileToUpload } from '../utils/imageForUpload.js';
 
 // The user's own Anthropic key, kept only in this browser. localStorage can
@@ -601,6 +602,7 @@ export default function TripAgentPanel({ onAddRows, defaultWindow = '', rates = 
                           </td>
                           <td className="px-2 py-1.5 text-slate-900">
                             {row.option}
+                            {(o.fare || o.cabin) && <div className="text-[0.65rem] text-slate-600 normal-case">{[o.fare, o.cabin && CABIN_LABEL[o.cabin]].filter(Boolean).join(' · ')}</div>}
                             {o.detail && <div className="text-[0.65rem] text-slate-500 normal-case">{o.detail}</div>}
                           </td>
                           <td className="px-2 py-1.5 font-mono text-slate-700">{row.timeText || '—'}</td>

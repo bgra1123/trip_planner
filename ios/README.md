@@ -33,7 +33,8 @@ appear; pull to refresh. Open a trip:
   puts it in the plan, Dismiss drops it.
 - **Travel / Stay sections**: the plan. The ticked option is the one in the
   total; tap the circle (or swipe) to pick another. Swipe left to remove.
-- **+** adds an option by card. Like everywhere else, a price needs a currency,
+- Waiting options show their fare and cabin when recorded.
+- **+** adds an option by card, including the fare name and cabin. Like everywhere else, a price needs a currency,
   a flight price needs "per traveler or total" (and a count), and the platform
   it came from is required — the server refuses otherwise.
 - **Rank combinations by cost** is the planner's optimizer.

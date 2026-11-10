@@ -141,6 +141,7 @@ struct PendingRow: View {
                 if !option.when.isEmpty { Text(option.when).foregroundStyle(.secondary) }
                 if let stops = option.stops { Text(stops == 0 ? "nonstop" : "\(stops) stop\(stops == 1 ? "" : "s")").foregroundStyle(.secondary) }
             }.font(.subheadline)
+            if !option.fareText.isEmpty { Text(option.fareText).font(.caption).foregroundStyle(.secondary) }
             HStack(spacing: 8) {
                 if let w = option.window, !w.isEmpty { Text(w) }
                 if let s = option.source, !s.isEmpty { Text("via \(s)") }

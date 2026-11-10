@@ -10,6 +10,7 @@ An interactive React-based trip planning tool that optimizes your Europe itinera
 - **Flexible Stay Duration**: Drag slider to adjust Milan stay (1–7 days)
 - **Family-Friendly Recommendations**: Optimized for travel with infant
 - **Cost Breakdown**: Real-time cost estimation for flights and train
+- **Portal, fare and cabin as columns**: each option records where it was priced (Capital One Travel, Amex Travel…), the fare name (Main Basic, Eco Fly, Premium Economy…) and the cabin read from it; a Preferences block narrows the comparison to the cabins and portals you want, or leaves out basic fares
 - **Several Trips**: Keep a named trip per journey; with the TripAgent connector, Claude sees the same trips
 - **Multi-Currency**: Mix EUR, USD, GBP, TRY and CHF; set `RATE:` lines to fold them into one total
 - **Price Capture**: Right-click any price, scrape supported portals, or ask Claude to search

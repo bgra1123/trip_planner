@@ -26,6 +26,8 @@ import {
 import { parsePortalText, METRO as PASTE_METRO, metroOf as pasteMetroOf } from '../src/utils/pasteResults.js';
 import { buildOfferFromCard, normalizeLeg, readClock, emptyCard } from '../src/utils/entryCard.js';
 import { parseSpokenEntry } from '../src/utils/spokenEntry.js';
+import { cabinFromFare, fareLevel, matchesPreferences } from '../src/utils/fareClass.js';
+import { migrateRowFields } from '../src/utils/parseTripNotes.js';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -83,7 +85,7 @@ check('flight row category', flightRow.category, 'travel');
 check('flight row time', flightRow.timeText, '06:45-11:30');
 check('flight row cost', flightRow.costText, '€2100');
 check('flight row window', flightRow.window, '14-19 Aug');
-ok('flight row detail mentions the source', flightRow.detail.includes('via kayak'), flightRow.detail);
+ok('flight row carries the portal as its own field', flightRow.source === 'kayak' && !flightRow.detail.includes('via kayak'), flightRow.detail);
 ok('flight row cost is parseable by the planner', rowCostIsParseable(flightRow));
 
 const hotel = normalizeOffer({
@@ -716,7 +718,7 @@ for (const blocked of ['chrome://settings', 'about:blank', 'devtools://devtools/
   check('times and duration', [got[0].departure, got[0].arrival, got[0].duration], ['5:30 PM', '5:45 AM', '7h 15m']);
   check('a comma price keeps its dollar sign', got[0].price, '$1,062');
   check('nonstop is zero stops', got[0].stops, 0);
-  ok('the fare name is kept (Basic fares have restrictions)', /fare: Delta Main Basic/.test(got[0].detail) && /fare: Light/.test(got[2].detail), got[0].detail + ' | ' + got[2].detail);
+  ok('the fare name is kept (Basic fares have restrictions)', got[0].fare === 'Delta Main Basic' && got[2].fare === 'Light' && !/fare:/.test(got[0].detail), got[0].fare + ' | ' + got[2].fare);
   ok('an overnight arrival is flagged', /arrives next day/.test(got[0].detail) && !/arrives next day/.test(got[2].detail), got[0].detail + ' | ' + got[2].detail);
   ok('"Earn 5X miles" is a perk, never a points price', !/points/.test(got[0].detail) && got[0].price === '$1,062');
   const normalized = normalizeOffers(got, {});
@@ -739,7 +741,7 @@ for (const blocked of ['chrome://settings', 'about:blank', 'devtools://devtools/
   check('all three phone cards are captured', gotPhone.length, 3);
   check('EWR-ORY and EWR-CDG are alternatives for one NYC → PAR leg',
     new Set(gotPhone.map((o) => `${o.from} → ${o.to}`)).size, 1);
-  check('phone layout: airline and fare', gotPhone.map((o) => [o.carrier, /fare: ([^·]+)/.exec(o.detail)[1].trim()]),
+  check('phone layout: airline and fare', gotPhone.map((o) => [o.carrier, o.fare]),
     [['French bee', 'Bee Light'], ['Delta', 'Delta Main Basic'], ['Air Caraïbes', 'Eco Basic']]);
   check('phone layout: prices keep dollars and commas', gotPhone.map((o) => o.price), ['$759', '$1,062', '$809']);
   ok('"Best Price" and "Earn 5X" badges are not the airline or fare', gotPhone.every((o) => !/Best|Earn|Fastest/.test(o.carrier) && !/Best Price|Earn 5X/.test(o.detail)), JSON.stringify(gotPhone.map((o) => [o.carrier, o.detail])));
@@ -819,9 +821,9 @@ Nonstop`;
   check('the result cut off at the top is skipped and counted, not guessed', r.skipped, 1);
   const [tap, d1, d2] = r.offers;
   check('the one-stop TAP result', [tap.carrier, tap.price, tap.stops, tap.duration, tap.departure, tap.arrival], ['TAP', '$735', 1, '28h', '12:25 AM', '9:25 AM']);
-  ok('its airports are kept and the long journey is flagged', /airports: EWR → ORY/.test(tap.detail) && /fare: Discount/.test(tap.detail) && /long journey \(28h\)/.test(tap.detail), tap.detail);
+  ok('its airports are kept and the long journey is flagged', /airports: EWR → ORY/.test(tap.detail) && tap.fare === 'Discount' && /long journey \(28h\)/.test(tap.detail), tap.detail + ' | ' + tap.fare);
   check('a Delta nonstop', [d1.carrier, d1.price, d1.stops, d1.from, d1.to], ['Delta', '$962', 0, 'NYC', 'PAR']);
-  ok('the airline printed twice is read once; fare name kept', /fare: Delta Main Basic/.test(d1.detail) && d1.carrier === 'Delta', d1.detail);
+  ok('the airline printed twice is read once; fare name kept', d1.fare === 'Delta Main Basic' && d1.carrier === 'Delta', d1.fare);
   ok('an overnight arrival is flagged', /arrives next day/.test(d1.detail) && /arrives next day/.test(d2.detail));
   ok('"Best Price" and "Earn 5X miles" never become data', r.offers.every((o) => !/Best|Earn/.test(o.carrier + o.detail)));
   const staged = normalizeOffers(r.offers, { source: 'pasted' });
@@ -843,7 +845,7 @@ Nonstop`;
   const p = parsePortalText(phone);
   check('phone layout: three results, nothing skipped', [p.found, p.skipped], [3, 0]);
   check('phone layout: each price goes with ITS flight', p.offers.map((o) => [o.carrier, o.price]), [['French bee', '$759'], ['Delta', '$1,062'], ['Air Caraïbes', '$809']]);
-  check('phone layout: fares and legs', p.offers.map((o) => [/fare: ([^·]+)/.exec(o.detail)[1].trim(), `${o.from} → ${o.to}`]), [['Bee Light', 'NYC → PAR'], ['Delta Main Basic', 'NYC → PAR'], ['Eco Basic', 'NYC → PAR']]);
+  check('phone layout: fares and legs', p.offers.map((o) => [o.fare, `${o.from} → ${o.to}`]), [['Bee Light', 'NYC → PAR'], ['Delta Main Basic', 'NYC → PAR'], ['Eco Basic', 'NYC → PAR']]);
   check('the trip dates above the results are offered as a window hint', p.windowHint, 'Oct 28 - Oct 31');
 
   // Not flight results: nothing is invented.
@@ -884,7 +886,7 @@ Nonstop`;
   check('the raw offer uses city codes', [good.raw.from, good.raw.to], ['NYC', 'PAR']);
   check('the price is exactly as typed (commas dropped)', good.raw.price, { amount: 1062, currency: 'USD' });
   check('per traveler carries its count out', good.travelers, '2');
-  ok('the fare is kept in the detail', /fare: Main Basic/.test(good.raw.detail), good.raw.detail);
+  ok('the fare is its own field', good.raw.fare === 'Main Basic' && !/fare:/.test(good.raw.detail), good.raw.fare);
   const cardOffers = normalizeOffers([good.raw], { source: 'card' });
   check('it normalizes to one NYC → PAR flight in dollars', [cardOffers[0].group, cardOffers[0].price.currency, cardOffers[0].departure], ['NYC → PAR', 'USD', '18:30']);
   check('and the planner totals it for two', totalForTravelers(cardOffers, good.travelers)[0].price.low, 2124);
@@ -932,6 +934,55 @@ Nonstop`;
   check('an activity sentence', parseSpokenEntry('Louvre late opening, 25 euros', 'activity').fields.name, 'Louvre late opening');
   check('nothing recognizable fills nothing', parseSpokenEntry('um well', 'flight').found, []);
   check('empty fills nothing', parseSpokenEntry('', 'hotel').found, []);
+}
+
+// ---- fares, cabins and portals as fields ------------------------------------
+{
+  check('Main Basic is economy, basic', [cabinFromFare('Delta Main Basic'), fareLevel('Delta Main Basic')], ['economy', 'basic']);
+  check('Eco Fly is economy, basic', [cabinFromFare('Eco Fly'), fareLevel('EcoFly')], ['economy', 'basic']);
+  check('Light is economy, basic', [cabinFromFare('Light'), fareLevel('Bee Light')], ['economy', 'basic']);
+  check('Premium Economy', [cabinFromFare('Premium Economy'), fareLevel('Premium Economy')], ['premium_economy', 'standard']);
+  check('Comfort+ is premium economy', cabinFromFare('Delta Comfort+'), 'premium_economy');
+  check('Business Flex', [cabinFromFare('Business Flex'), fareLevel('Business Flex')], ['business', 'flex']);
+  check('First', cabinFromFare('First Class'), 'first');
+  check('Prime Fly is a flex economy fare', [cabinFromFare('PrimeFly'), fareLevel('Prime Fly')], ['economy', 'flex']);
+  check('an unknown word says nothing about the cabin', cabinFromFare('Tariff Z'), '');
+  check('an unknown fare name is standard level', fareLevel('Tariff Z'), 'standard');
+  check('no fare name, no level', [cabinFromFare(''), fareLevel('')], ['', '']);
+
+  const captured = normalizeOffers([
+    { kind: 'flight', from: 'NYC', to: 'PAR', carrier: 'Delta', fare: 'Delta Main Basic', price: { amount: 962, currency: 'USD' }, source: 'Capital One Travel' },
+    { kind: 'flight', from: 'NYC', to: 'PAR', carrier: 'Air France', fare: 'Premium Economy', cabin: 'premium_economy', price: { amount: 1500, currency: 'USD' }, source: 'Amex Travel' },
+    { kind: 'flight', from: 'NYC', to: 'PAR', carrier: 'TAP', price: { amount: 735, currency: 'USD' }, source: 'Capital One Travel' },
+    { kind: 'hotel', place: 'Paris', label: 'H', fare: 'nonsense', price: { amount: 200, currency: 'USD' }, source: 'Amex Travel' },
+  ], {});
+  check('an offer carries fare and the cabin it implies', [captured[0].fare, captured[0].cabin], ['Delta Main Basic', 'economy']);
+  check('a given cabin wins', captured[1].cabin, 'premium_economy');
+  check('no fare name, no cabin', [captured[2].fare, captured[2].cabin], ['', '']);
+  check('a hotel has no fare or cabin', [captured[3].fare, captured[3].cabin], ['', '']);
+  const rows = offersToRows(captured);
+  check('rows get portal, fare and cabin columns', [rows[0].source, rows[0].fare, rows[0].cabin], ['Capital One Travel', 'Delta Main Basic', 'economy']);
+  ok('the detail no longer repeats the portal or fare', !/via |fare:/.test(rows[0].detail), rows[0].detail);
+  const grouped = groupRows(rows, []);
+  check('grouped options carry them too', grouped.travel[0].options.map((o) => [o.source, o.fare, o.cabin]), [['Capital One Travel', 'Delta Main Basic', 'economy'], ['Amex Travel', 'Premium Economy', 'premium_economy'], ['Capital One Travel', '', '']]);
+  const exported = buildExportData(grouped, defaultSelection(grouped), 'NYC → PAR');
+  check('the export names portal, fare and cabin', [exported.currentPick.travel[0].source, exported.currentPick.travel[0].fare, exported.currentPick.travel[0].cabin], ['Capital One Travel', 'Delta Main Basic', 'economy']);
+
+  const opts = grouped.travel[0].options;
+  ok('no preferences: everything matches', opts.every((o) => matchesPreferences(o, { cabins: [], portals: [], avoidBasic: false })));
+  check('prefer premium economy: only that fare, but an unknown cabin is not excluded', opts.filter((o) => matchesPreferences(o, { cabins: ['premium_economy'], portals: [], avoidBasic: false })).map((o) => o.label), ['Air France', 'TAP']);
+  check('prefer Amex: only Amex', opts.filter((o) => matchesPreferences(o, { cabins: [], portals: ['Amex Travel'], avoidBasic: false })).map((o) => o.label), ['Air France']);
+  check('avoid basic fares drops Main Basic', opts.filter((o) => matchesPreferences(o, { cabins: [], portals: [], avoidBasic: true })).map((o) => o.label), ['Air France', 'TAP']);
+  ok('null preferences match', matchesPreferences(opts[0], null));
+
+  // Old saved rows carried these in the detail text.
+  const old = migrateRowFields({ id: 'r1', category: 'travel', group: 'NYC → PAR', option: 'Delta', timeText: '', costText: '$962', detail: 'fare: Delta Main Basic · nonstop · via Capital One Travel', window: '' });
+  check('an old row is migrated: fare, cabin, portal lifted out of the detail', [old.fare, old.cabin, old.source, old.detail], ['Delta Main Basic', 'economy', 'Capital One Travel', 'nonstop']);
+  const oldStay = migrateRowFields({ id: 'r2', category: 'stay', group: 'Paris', option: 'H', costText: '$200', detail: 'Amex FHR · via Amex Travel' });
+  check('a stay row keeps its note and gets its portal', [oldStay.source, oldStay.detail, oldStay.fare], ['Amex Travel', 'Amex FHR', '']);
+  const fresh = migrateRowFields({ id: 'r3', category: 'travel', group: 'A → B', option: 'x', detail: 'fare: Light · via Kayak', fare: 'Flex', source: 'Expedia', cabin: 'business' });
+  check('a row that already has the fields is left alone', [fresh.fare, fresh.source, fresh.cabin], ['Flex', 'Expedia', 'business']);
+  check('a plain row is unchanged', migrateRowFields({ id: 'r4', category: 'travel', detail: 'nonstop' }).detail, 'nonstop');
 }
 
 // ---- source links and price age ------------------------------------------

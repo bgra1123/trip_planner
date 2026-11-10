@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { KINDS, CURRENCIES, emptyCard, buildOfferFromCard } from '../utils/entryCard.js';
+import { CABINS, CABIN_LABEL } from '../utils/fareClass.js';
 import { parseSpokenEntry } from '../utils/spokenEntry.js';
 
 // Guided input cards: pick what you're adding, fill a few clearly labelled
@@ -208,7 +209,8 @@ export default function EntryCards({ onStage, defaultWindow = '', existingLegs =
               {field('Departs', 'depart', { placeholder: '6:30 pm' })}
               {field('Arrives', 'arrive', { placeholder: '7:45 am' })}
               {field(kind === 'train' ? 'Operator' : 'Airline', 'carrier', { placeholder: kind === 'train' ? 'Trenitalia' : 'Air France' })}
-              {field('Fare or class', 'fare', { placeholder: 'Main Basic' })}
+              {field('Fare', 'fare', { placeholder: 'Main Basic, Eco Fly…' })}
+              {select('Cabin', 'cabin', CABINS.map((c) => [c, CABIN_LABEL[c]]), { placeholder: 'From the fare name' })}
               {select('Stops', 'stops', [['0', 'Nonstop / direct'], ['1', '1 stop'], ['2', '2 stops']], { placeholder: 'Not stated' })}
               {field('Window', 'window', { placeholder: '28-31 Oct' })}
             </div>

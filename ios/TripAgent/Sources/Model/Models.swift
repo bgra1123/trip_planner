@@ -53,6 +53,8 @@ struct PendingOption: Identifiable, Codable, Equatable {
     var category: String?
     var group: String?
     var carrier: String?
+    var fare: String?
+    var cabin: String?
     var departure: String?
     var arrival: String?
     var duration: String?
@@ -88,6 +90,14 @@ struct PendingOption: Identifiable, Codable, Equatable {
         let night = (perNight ?? false) ? "/night × \(nights ?? 1)" : ""
         return symbol + range + night
     }
+
+    var cabinLabel: String {
+        switch cabin ?? "" {
+        case "economy": return "Economy"; case "premium_economy": return "Premium economy"
+        case "business": return "Business"; case "first": return "First"; default: return ""
+        }
+    }
+    var fareText: String { [fare ?? "", cabinLabel].filter { !$0.isEmpty }.joined(separator: " · ") }
 
     var when: String {
         let dep = departure ?? "", arr = arrival ?? ""

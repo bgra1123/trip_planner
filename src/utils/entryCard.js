@@ -14,6 +14,7 @@
 
 import { normalizeTime } from './tripAgentOffers.js';
 import { metroOf } from './pasteResults.js';
+import { CABINS } from './fareClass.js';
 
 export const KINDS = ['flight', 'train', 'hotel', 'activity'];
 export const CURRENCIES = ['USD', 'EUR', 'GBP', 'TRY', 'CHF'];
@@ -59,7 +60,7 @@ export function emptyCard(kind) {
   const common = { price: '', currency: '', note: '', window: '' };
   if (kind === 'hotel') return { ...common, place: '', name: '', priceKind: '', nights: '' };
   if (kind === 'activity') return { ...common, name: '', place: '' };
-  return { ...common, from: '', to: '', depart: '', arrive: '', carrier: '', fare: '', stops: '', basis: '', travelers: '' };
+  return { ...common, from: '', to: '', depart: '', arrive: '', carrier: '', fare: '', cabin: '', stops: '', basis: '', travelers: '' };
 }
 
 // -> { errors: [{ field, message }], raw, travelers }
@@ -99,13 +100,14 @@ export function buildOfferFromCard(kind, values) {
       }
     }
     if (from.airport || to.airport) details.push(`airports: ${from.airport || from.code} → ${to.airport || to.code}`);
-    if (String(v.fare || '').trim()) details.push(`fare: ${String(v.fare).trim().slice(0, 60)}`);
     Object.assign(raw, {
       from: from.code,
       to: to.code,
       departure: dep,
       arrival: arr,
       carrier: String(v.carrier || '').trim().slice(0, 40),
+      fare: String(v.fare || '').trim().slice(0, 60),
+      cabin: CABINS.includes(v.cabin) ? v.cabin : undefined,
       stops: v.stops === '' || v.stops === undefined ? null : Number(v.stops),
     });
   } else if (kind === 'hotel') {

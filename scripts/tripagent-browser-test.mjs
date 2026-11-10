@@ -192,7 +192,7 @@ record('a captured lira fare keeps its currency', /\u20ba38000|₺38000/.test(no
   record('three flights read, the cut-off one skipped and reported', /Read 3 flights from the pasted text; skipped 1 cut-off result/.test(pbody), (pbody.match(/Read .*/) || ['(no message)'])[0]);
   record('per traveler x 2 is applied to the shown prices', /\$1,?470/.test(pbody) && /\$1,?924/.test(pbody), (pbody.match(/\$\d[\d,]*/g) || []).join(' '));
   record('every result is one NYC → PAR leg', (pbody.match(/NYC → PAR/g) || []).length >= 3);
-  record('the review list shows fare, airports and how it was totalled', /fare: Discount/.test(pbody) && /airports: EWR → ORY/.test(pbody) && /USD 735 per traveler × 2/.test(pbody), (pbody.match(/[^\n]*fare: Discount[^\n]*/) || ['(no detail line)'])[0]);
+  record('the review list shows fare, airports and how it was totalled', /Discount/.test(pbody) && /airports: EWR → ORY/.test(pbody) && /USD 735 per traveler × 2/.test(pbody), (pbody.match(/[^\n]*fare: Discount[^\n]*/) || ['(no detail line)'])[0]);
   record('the page\'s own dates are not invented when none were pasted', !/window "/.test(pbody));
   record('no AI request was made', apiCalls.length === 0, apiCalls.join(','));
   await pastePage.getByLabel('Pasted results text').fill('hello world, nothing here');
@@ -271,7 +271,7 @@ record('the staging list empties once added', !/Add all \d+ to table/.test(after
   await card('Departs').fill('6:30 pm');
   await card('Arrives').fill('7:45 am');
   await card('Airline').fill('Air France');
-  await card('Fare or class').fill('Main Basic');
+  await card('Fare').fill('Main Basic');
   await card('Price').fill('612');
   await addFlight.click();
   let body = await cardPage.locator('body').innerText();
@@ -290,9 +290,25 @@ record('the staging list empties once added', !/Add all \d+ to table/.test(after
   body = await cardPage.locator('body').innerText();
   record('with every answer given, the flight is staged for review', /Added the flight to the review list/.test(body) && (await staged().count()) === 1);
   record('it is one NYC → PAR leg, doubled for two travelers', /NYC → PAR/.test(body) && /\$1,?224/.test(body), (body.match(/\$\d[\d,]*/g) || []).join(' '));
-  record('the review list shows the fare and how it was totalled', /fare: Main Basic/.test(body) && /USD 612 per traveler × 2/.test(body));
+  record('the review list shows the fare and how it was totalled', /Main Basic/.test(body) && /USD 612 per traveler × 2/.test(body));
   record('nothing reached the plan table', !(await cardPage.locator('table').filter({ has: cardPage.locator('th', { hasText: 'Group / Leg' }) }).locator('tbody tr').filter({ hasText: 'Air France' }).count()));
   record('the form keeps the route and your answers for the next flight', (await card('From').inputValue()) === 'New York' && (await card('Currency').inputValue()) === 'USD' && (await card('Price is').inputValue()) === 'per_traveler' && (await card('Price').inputValue()) === '');
+
+  // Portal, fare and cabin are columns now, and preferences read them.
+  await staged().locator('tbody tr', { hasText: /\$1,?224/ }).getByRole('button', { name: 'Add' }).click();
+  await cardPage.waitForTimeout(400);
+  const cardEditToggle = cardPage.getByRole('button', { name: /Edit trip data|Hide trip data/ });
+  if (/Edit trip data/.test(await cardEditToggle.innerText())) await cardEditToggle.click();
+  const planHead = await cardPage.locator('table').filter({ has: cardPage.locator('th', { hasText: 'Group / Leg' }) }).locator('thead').innerText();
+  record('the plan table has Portal, Fare and Cabin columns', /Portal/.test(planHead) && /Fare/.test(planHead) && /Cabin/.test(planHead), planHead);
+  record('the added flight carries its fare, and its cabin was read from it', (await cardPage.getByLabel('Fare', { exact: true }).last().inputValue()) === 'Main Basic' && (await cardPage.getByLabel('Cabin', { exact: true }).last().inputValue()) === 'economy');
+  body = await cardPage.locator('body').innerText();
+  record('the trip path shows fare, cabin and that it is a basic fare', /Main Basic · Economy · basic fare/.test(body), (body.match(/[^\n]*Main Basic[^\n]*/) || [''])[0]);
+  record('a Preferences block appears once there is a flight', await cardPage.getByTestId('preferences').count() === 1);
+  await cardPage.getByLabel(/Avoid basic fares/).check();
+  body = await cardPage.locator('body').innerText();
+  record('avoiding basic fares flags the picked Main Basic flight, without changing it', /Doesn't fit your preferences/.test(body) && /\$1,?224/.test(body));
+  await cardPage.getByLabel(/Avoid basic fares/).uncheck();
 
   // One sentence fills the card; the user still answers anything it can't know.
   await card('describe it in a sentence').fill('flight from New York to Paris, leaves 9 pm, lands 9:10 am, Delta, 540 dollars for two travelers');
@@ -304,7 +320,7 @@ record('the staging list empties once added', !/Add all \d+ to table/.test(after
   await card('Price is').selectOption('total');
   await addFlight.click();
   await cardPage.getByText(/Added the flight/).waitFor({ timeout: 3000 }).catch(() => {});
-  record('answered "total", the second flight is staged at the price as given', (await staged().locator('tbody tr').count()) === 2 && /\$540/.test(await cardPage.locator('body').innerText()));
+  record('answered "total", the second flight is staged at the price as given', (await staged().locator('tbody tr').count()) === 1 && /\$540/.test(await cardPage.locator('body').innerText()));
 
   // Hotel card: per night needs the nights; a hotel is never "per traveler".
   await cardPage.getByRole('tab', { name: 'Hotel' }).click();
@@ -316,7 +332,7 @@ record('the staging list empties once added', !/Add all \d+ to table/.test(after
   await cardPage.getByText(/Added the hotel/).waitFor({ timeout: 3000 }).catch(() => {});
   body = await cardPage.locator('body').innerText();
   const hotelRow = staged().locator('tbody tr').filter({ hasText: 'Hotel Le Marais' });
-  record('the hotel is staged under its city, €280 a night for 3 nights', (await hotelRow.locator('input').first().inputValue()) === 'Paris' && /€280\/night x3/.test(await hotelRow.innerText()) && (await staged().locator('tbody tr').count()) === 3, await hotelRow.innerText());
+  record('the hotel is staged under its city, €280 a night for 3 nights', (await hotelRow.locator('input').first().inputValue()) === 'Paris' && /€280\/night x3/.test(await hotelRow.innerText()) && (await staged().locator('tbody tr').count()) === 2, await hotelRow.innerText());
 
   // Activity: a name is required; the price is for everyone.
   await cardPage.getByRole('tab', { name: 'Activity' }).click();

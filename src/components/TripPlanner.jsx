@@ -1,8 +1,9 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   groupRows, linesToRows, newRow, newRowId, bumpRowIdCounter, costLabel, euro, sumRange, enumerateCombinations,
-  convertToBase, buildExportData, toMarkdown, deriveRouteChain, DEFAULT_TRIP_NOTES, costTextIssue,
+  convertToBase, buildExportData, toMarkdown, deriveRouteChain, DEFAULT_TRIP_NOTES, costTextIssue, migrateRowFields,
 } from '../utils/parseTripNotes';
+import { matchesPreferences, CABINS, CABIN_LABEL, fareLevel, LEVEL_LABEL, EMPTY_PREFERENCES } from '../utils/fareClass';
 import TripAgentPanel from './TripAgentPanel';
 import TripBar from './TripBar';
 import useTripSync, { ConnectorContext } from '../hooks/useTripSync';
@@ -22,6 +23,9 @@ function ratesToRows(rates) {
 // trip of a new user, which starts as the example.
 function prepareSnapshot(data) {
   if (!data || typeof data !== 'object' || !Array.isArray(data.rows)) return null;
+  // Older saves kept the portal and fare in the detail text; lift them into
+  // their columns once, so preferences can read them.
+  data = { ...data, rows: data.rows.map(migrateRowFields) };
   bumpRowIdCounter([
     ...data.rows.map((r) => r.id),
     ...(Array.isArray(data.rateRows) ? data.rateRows.map((r) => r.id) : []),
@@ -91,6 +95,10 @@ function TripWorkspace({ initial, onSnapshot }) {
   const [notes, setNotes] = useState(() => (saved && Array.isArray(saved.notes)) ? saved.notes : linesToRows(DEFAULT_TRIP_NOTES).notes);
   const [rateRows, setRateRows] = useState(() => (saved && Array.isArray(saved.rateRows)) ? saved.rateRows : ratesToRows(linesToRows(DEFAULT_TRIP_NOTES).rates));
   const [selection, setSelection] = useState(() => (saved && saved.selection) || { travel: {}, stay: {}, activity: {} });
+  // What you'd rather fly and where you'd rather book. Used to narrow the
+  // comparison and to flag a picked option that doesn't fit; never to hide a
+  // row or change a price.
+  const [prefs, setPrefs] = useState(() => (saved && saved.prefs && typeof saved.prefs === 'object') ? { ...EMPTY_PREFERENCES, ...saved.prefs } : EMPTY_PREFERENCES);
 
   const rates = useMemo(() => {
     const m = {};
@@ -134,9 +142,9 @@ function TripWorkspace({ initial, onSnapshot }) {
   // Report every change so the trip is saved (and synced) — a reload doesn't
   // lose it.
   useEffect(() => {
-    onSnapshot({ version: 1, notesText, rows, notes, rateRows, selection, activeWindow });
+    onSnapshot({ version: 1, notesText, rows, notes, rateRows, selection, activeWindow, prefs });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notesText, rows, notes, rateRows, selection, activeWindow]);
+  }, [notesText, rows, notes, rateRows, selection, activeWindow, prefs]);
 
   function convertNotesToTable() {
     const result = linesToRows(notesText);
@@ -203,12 +211,26 @@ function TripWorkspace({ initial, onSnapshot }) {
 
   const headerStops = deriveRouteChain(parsed.travel);
 
-  const comboGroups = useMemo(() => {
+  // Preferences narrow the comparison. A leg where nothing fits keeps all its
+  // options (a comparison with a hole in it would be wrong, not strict), and
+  // the count of options left out is shown so the narrowing is never silent.
+  const { comboGroups, preferenceExcluded } = useMemo(() => {
     const groups = [];
-    parsed.travel.forEach((g) => groups.push({ kind: 'travel', key: g.key, options: g.options }));
-    parsed.stay.forEach((g) => groups.push({ kind: 'stay', key: g.key, options: g.options }));
-    return groups;
-  }, [parsed]);
+    let excluded = 0;
+    const push = (kind, g) => {
+      const fitting = g.options.filter((o) => matchesPreferences(o, prefs));
+      if (fitting.length && fitting.length < g.options.length) excluded += g.options.length - fitting.length;
+      groups.push({ kind, key: g.key, options: fitting.length ? fitting : g.options });
+    };
+    parsed.travel.forEach((g) => push('travel', g));
+    parsed.stay.forEach((g) => push('stay', g));
+    return { comboGroups: groups, preferenceExcluded: excluded };
+  }, [parsed, prefs]);
+  const knownPortals = useMemo(() => Array.from(new Set(rows.map((r) => (r.source || '').trim()).filter(Boolean))).sort(), [rows]);
+  const hasPreferences = prefs.cabins.length > 0 || prefs.portals.length > 0 || prefs.avoidBasic;
+  function togglePref(list, value) {
+    setPrefs((p) => ({ ...p, [list]: p[list].includes(value) ? p[list].filter((x) => x !== value) : [...p[list], value] }));
+  }
 
   const comboResult = useMemo(() => enumerateCombinations(comboGroups, rates, COMBO_CAP), [comboGroups, rates]);
 
@@ -488,6 +510,9 @@ function TripWorkspace({ initial, onSnapshot }) {
                   <th className="text-left font-medium px-2 py-2">Option</th>
                   <th className="text-left font-medium px-2 py-2">Time</th>
                   <th className="text-left font-medium px-2 py-2">Cost</th>
+                  <th className="text-left font-medium px-2 py-2">Portal</th>
+                  <th className="text-left font-medium px-2 py-2">Fare</th>
+                  <th className="text-left font-medium px-2 py-2">Cabin</th>
                   <th className="text-left font-medium px-2 py-2">Detail</th>
                   <th className="px-2 py-2"></th>
                 </tr>
@@ -576,6 +601,42 @@ function TripWorkspace({ initial, onSnapshot }) {
                           aria-invalid={costUnrecognized || undefined}
                         />
                         {costUnrecognized && <span className="text-red-600 text-[0.65rem]" title="Not recognized as a cost — excluded from totals until fixed">⚠ not recognized</span>}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input
+                          type="text"
+                          list="trip-known-portals"
+                          className={inputCls}
+                          value={row.source || ''}
+                          onChange={(e) => updateRow(row.id, 'source', e.target.value)}
+                          placeholder="Capital One Travel"
+                          aria-label="Portal"
+                        />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        {row.category === 'travel' ? (
+                          <input
+                            type="text"
+                            className={inputCls}
+                            value={row.fare || ''}
+                            onChange={(e) => updateRow(row.id, 'fare', e.target.value)}
+                            placeholder="Main Basic"
+                            aria-label="Fare"
+                          />
+                        ) : <span className="text-slate-300">—</span>}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        {row.category === 'travel' ? (
+                          <select
+                            className={inputCls}
+                            value={row.cabin || ''}
+                            onChange={(e) => updateRow(row.id, 'cabin', e.target.value)}
+                            aria-label="Cabin"
+                          >
+                            <option value="">—</option>
+                            {CABINS.map((c) => <option key={c} value={c}>{CABIN_LABEL[c]}</option>)}
+                          </select>
+                        ) : <span className="text-slate-300">—</span>}
                       </td>
                       <td className="px-2 py-1.5">
                         <input
@@ -692,6 +753,14 @@ function TripWorkspace({ initial, onSnapshot }) {
                           <span className="text-slate-500">{meta}</span>
                           <span className="font-semibold text-slate-900">{costLabel(picked)}</span>
                         </div>
+                        {(picked.fare || picked.cabin || picked.source) && (
+                          <div className="text-[0.65rem] text-slate-500 leading-snug">
+                            {[picked.fare, picked.cabin && CABIN_LABEL[picked.cabin], fareLevel(picked.fare) === 'basic' ? 'basic fare' : '', picked.source && `via ${picked.source}`].filter(Boolean).join(' · ')}
+                          </div>
+                        )}
+                        {hasPreferences && !matchesPreferences(picked, prefs) && (
+                          <div className="text-[0.65rem] text-amber-700" title="This option doesn't fit the preferences set below. It still counts; this is only a flag.">Doesn't fit your preferences</div>
+                        )}
                         {cardProgram && (
                           <div className="pt-2 border-t border-slate-100">
                             <div className="text-[0.65rem] font-semibold text-slate-700 uppercase tracking-wide">
@@ -773,6 +842,47 @@ function TripWorkspace({ initial, onSnapshot }) {
         </details>
 
         {/* Time-Window Cost Analysis */}
+        {rows.some((r) => r.category === 'travel') && (
+          <section className="bg-white border border-slate-200 rounded-lg shadow-sm p-4 mb-8" data-testid="preferences">
+            <datalist id="trip-known-portals">{knownPortals.map((p) => <option key={p} value={p} />)}</datalist>
+            <div className="flex items-baseline justify-between gap-3 flex-wrap mb-2">
+              <h2 className="text-sm font-semibold text-slate-900">Preferences</h2>
+              <span className="text-xs text-slate-500">Narrow the comparison to the cabins and portals you want. Prices and rows are never changed; a picked option that doesn't fit is only flagged.</span>
+            </div>
+            <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[0.65rem] uppercase tracking-wide text-slate-500">Cabin</span>
+                {CABINS.map((c) => (
+                  <label key={c} className="flex items-center gap-1">
+                    <input type="checkbox" checked={prefs.cabins.includes(c)} onChange={() => togglePref('cabins', c)} /> {CABIN_LABEL[c]}
+                  </label>
+                ))}
+              </div>
+              <label className="flex items-center gap-1">
+                <input type="checkbox" checked={prefs.avoidBasic} onChange={() => setPrefs((p) => ({ ...p, avoidBasic: !p.avoidBasic }))} /> Avoid {LEVEL_LABEL.basic.toLowerCase()} fares
+              </label>
+              {knownPortals.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[0.65rem] uppercase tracking-wide text-slate-500">Portal</span>
+                  {knownPortals.map((p) => (
+                    <label key={p} className="flex items-center gap-1">
+                      <input type="checkbox" checked={prefs.portals.includes(p)} onChange={() => togglePref('portals', p)} /> {p}
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+            {hasPreferences && (
+              <p className="text-xs text-slate-500 mt-2">
+                {preferenceExcluded
+                  ? `${preferenceExcluded} option${preferenceExcluded === 1 ? '' : 's'} left out of the comparison by these preferences.`
+                  : 'Every option fits these preferences.'}
+                {' '}An option with no cabin or portal recorded is never left out.
+              </p>
+            )}
+          </section>
+        )}
+
         {comboGroups.length >= 2 && (
         <details className="mb-6">
           <summary className="text-xs font-semibold text-slate-500 uppercase tracking-wide cursor-pointer select-none">Compare all combinations</summary>

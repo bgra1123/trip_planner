@@ -137,7 +137,6 @@ export function parsePortalText(text) {
     const detail = [];
     if (pointsLine) detail.push(`${pointsLine} (points — not counted as cash)`);
     if (from !== fromAp || to !== toAp) detail.push(`airports: ${fromAp} → ${toAp}`);
-    if (others[1]) detail.push(`fare: ${others[1].slice(0, 60)}`);
     const dep = clockMinutes(depLine[1]);
     const arr = clockMinutes(arrLine[1]);
     if (arrLine[2]) detail.push(`arrives +${arrLine[2]} day${arrLine[2] === '1' ? '' : 's'}`);
@@ -150,6 +149,7 @@ export function parsePortalText(text) {
       from,
       to,
       carrier: others[0] ? others[0].slice(0, 40) : '',
+      fare: others[1] ? others[1].slice(0, 60) : '',
       departure: depLine[1],
       arrival: arrLine[1],
       duration: lines[c.dep + 1],

@@ -402,7 +402,6 @@ var TripAgentScrapers = (function () {
       var legFrom = cardRoute ? metroOf(cardRoute.from) : (route ? route.from : '');
       var legTo = cardRoute ? metroOf(cardRoute.to) : (route ? route.to : '');
       if (cardRoute && (legFrom !== cardRoute.from || legTo !== cardRoute.to)) detail.push('airports: ' + cardRoute.from + ' \u2192 ' + cardRoute.to);
-      if (parts.fare) detail.push('fare: ' + parts.fare);
       // An arrival clock earlier than the departure clock means the next day
       // (local times, and no flight is over 24 hours here).
       var dep = clockMinutes(times[0]);
@@ -417,6 +416,7 @@ var TripAgentScrapers = (function () {
         from: legFrom,
         to: legTo,
         carrier: parts.carrier || collapseRepeat(carrierFrom(content)),
+        fare: parts.fare || '',
         departure: times[0] || '',
         arrival: times[1] || '',
         duration: durationMatch ? durationMatch[0] : '',

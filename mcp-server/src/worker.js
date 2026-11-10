@@ -37,6 +37,7 @@ import { normalizeOffers, mergeOffers, offerCostText, offersFromNotesText } from
 import {
   groupRows, deriveRouteChain, enumerateCombinations, pickedOption, costLabel, euro, sumRange,
 } from '../../src/utils/parseTripNotes.js';
+import { matchesPreferences, CABINS, CABIN_LABEL } from '../../src/utils/fareClass.js';
 
 const SERVER_INFO = { name: 'tripagent', version: '2.0.0' };
 const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
@@ -48,7 +49,7 @@ const COMBO_CAP = 4000;
 const DEFAULT_ORIGINS = ['https://bgra1123.github.io', 'http://localhost:3000', 'http://127.0.0.1:3000'];
 const TRIP_ID_RE = /^[A-Za-z0-9_-]{6,40}$/;
 
-const INSTRUCTIONS = `This server holds the user's trips in their trip planner. Typical use: the user shares a screenshot, or pastes the text of a results page, from a booking site or credit-card travel portal (Capital One Travel, Amex Travel and the like), or dictates a flight or hotel; record every option with add_trip_options. Pasted page text is more reliable than a screenshot — read the numbers from it exactly, and ignore menus, filters and ads around the results. Capital One / Amex flight results are cards, and their layout differs between phone and desktop, so identify each part by what it is, not where it sits: a price like "$1,062"; departure time, duration and arrival time ("11:00 PM", "7h 10m", "11:10 AM"); the airline (sometimes printed twice); the fare name ("Delta Main Basic", "Bee Light", "Eco Basic" — put it in note, since basic fares have restrictions); stops ("Nonstop"); and the airports as "EWR - ORY". Ignore banners and badges ("Earn 5X miles on flights" is a perk, not a points price; "Best Price", "Fastest" are labels), filter chips and buttons. Record only results you can see in full, and say which were cut off. A leg is between cities, not airports, so set from/to to the city codes (EWR, JFK, LGA = NYC; CDG, ORY = PAR; LHR, LGW = LON; MXP, LIN = MIL) so every New York–Paris result is an alternative for the same leg, and put the exact airports ("EWR to ORY") in note. If the arrival clock is earlier than departure, it lands the next day (say so in note). Use the trip dates shown at the top of the page (e.g. "Oct 28 - Oct 31") as the window. Never assume what a portal's price covers. Before recording, confirm with the user: is the price per traveler or for everyone, how many are travelling, and does it cover the round trip or just that flight. Then pass their answer as price_basis ("per_traveler" with travelers, or "total") and give prices exactly as shown — the server does the multiplying and notes it ("$1,062 per traveler × 2"), and add_trip_options refuses priced options without a price_basis. You cannot know this from the page, so you must ask; once the user has told you for a portal in this conversation, reuse their answer instead of asking again. Card portals quote in the card's currency (usually USD) and often show a miles/points price beside the cash price: the cash price goes in price, the points go in note, never the other way round. Hotels from a card program (e.g. Amex Fine Hotels + Resorts) get the program name in note. Only record what is actually stated or shown — never estimate or invent a price, time, or airline. If the user corrects something you recorded, use update_trip_option; to drop one, remove_trip_option (both need the option's id, shown by list_pending_options and add_trip_options). Options land in the planner's review list and the user taps Add there — tell them they are waiting for review, not added. Only call create_trip when the user asks for a new trip.
+const INSTRUCTIONS = `This server holds the user's trips in their trip planner. Typical use: the user shares a screenshot, or pastes the text of a results page, from a booking site or credit-card travel portal (Capital One Travel, Amex Travel and the like), or dictates a flight or hotel; record every option with add_trip_options. Pasted page text is more reliable than a screenshot — read the numbers from it exactly, and ignore menus, filters and ads around the results. Capital One / Amex flight results are cards, and their layout differs between phone and desktop, so identify each part by what it is, not where it sits: a price like "$1,062"; departure time, duration and arrival time ("11:00 PM", "7h 10m", "11:10 AM"); the airline (sometimes printed twice); the fare name ("Delta Main Basic", "Bee Light", "Eco Fly" — put it in fare, not in note: the user can prefer a cabin or avoid basic fares, and optimize_trip can rank by cabin, portal or without basic fares; set cabin only when the page says Premium Economy, Business or First); stops ("Nonstop"); and the airports as "EWR - ORY". Ignore banners and badges ("Earn 5X miles on flights" is a perk, not a points price; "Best Price", "Fastest" are labels), filter chips and buttons. Record only results you can see in full, and say which were cut off. A leg is between cities, not airports, so set from/to to the city codes (EWR, JFK, LGA = NYC; CDG, ORY = PAR; LHR, LGW = LON; MXP, LIN = MIL) so every New York–Paris result is an alternative for the same leg, and put the exact airports ("EWR to ORY") in note. If the arrival clock is earlier than departure, it lands the next day (say so in note). Use the trip dates shown at the top of the page (e.g. "Oct 28 - Oct 31") as the window. Never assume what a portal's price covers. Before recording, confirm with the user: is the price per traveler or for everyone, how many are travelling, and does it cover the round trip or just that flight. Then pass their answer as price_basis ("per_traveler" with travelers, or "total") and give prices exactly as shown — the server does the multiplying and notes it ("$1,062 per traveler × 2"), and add_trip_options refuses priced options without a price_basis. You cannot know this from the page, so you must ask; once the user has told you for a portal in this conversation, reuse their answer instead of asking again. Card portals quote in the card's currency (usually USD) and often show a miles/points price beside the cash price: the cash price goes in price, the points go in note, never the other way round. Hotels from a card program (e.g. Amex Fine Hotels + Resorts) get the program name in note. Only record what is actually stated or shown — never estimate or invent a price, time, or airline. If the user corrects something you recorded, use update_trip_option; to drop one, remove_trip_option (both need the option's id, shown by list_pending_options and add_trip_options). Options land in the planner's review list and the user taps Add there — tell them they are waiting for review, not added. Only call create_trip when the user asks for a new trip.
 
 To find public options, use whatever flight, hotel or train search tools the user has connected (other connectors in this chat), then record the results here with add_trip_options: one entry per result you want them to consider, copying each price, time and carrier exactly as the search returned it, with the search's name as source (e.g. "Expedia") and the date range as window. Use the currency the search quoted, and totals for everyone travelling. Search results are live quotes that can change, so say so and never present one as booked. Do not book anything. Do not record results you did not see.`;
 
@@ -63,6 +64,8 @@ const OPTION_PROPERTIES = {
   departure: { type: 'string', description: 'Departure time as shown, 24h HH:MM preferred (travel only).' },
   arrival: { type: 'string', description: 'Arrival time as shown, 24h HH:MM preferred (travel only).' },
   carrier: { type: 'string', description: 'Airline or operator, if shown.' },
+  fare: { type: 'string', description: 'Fare name exactly as shown ("Delta Main Basic", "Eco Fly", "Premium Economy"), travel only. The user can prefer a cabin or avoid basic fares, so this matters.' },
+  cabin: { type: 'string', enum: CABINS, description: 'Seat class, when the page says it. Left out, it is read from the fare name where the words allow.' },
   stops: { type: 'integer', minimum: 0, description: 'Number of stops, if shown (0 = nonstop).' },
   price: { type: 'number', description: 'Cash price for the whole booking (all travelers), exactly as it should total. Omit entirely if no cash price is known — never estimate one.' },
   currency: { type: 'string', description: 'ISO 4217 code of that price, e.g. "USD", "EUR". Required whenever price is given.' },
@@ -162,6 +165,9 @@ const TOOLS = [
         tripId: TRIP_ID_PROP,
         window: { type: 'string', description: 'Only this date window, e.g. "21-24 Oct". Omit for all.' },
         limit: { type: 'integer', minimum: 1, maximum: 50, description: 'How many to return (default 10).' },
+        cabin: { type: 'string', enum: CABINS, description: 'Only options in this cabin (an option with no cabin recorded is still included).' },
+        portal: { type: 'string', description: 'Only options from this platform, e.g. "Capital One Travel".' },
+        avoid_basic: { type: 'boolean', description: 'Leave out basic/light fares.' },
       },
       additionalProperties: false,
     },
@@ -293,6 +299,8 @@ function rawFromOption(option, windowLabel) {
     departure: option.departure,
     arrival: option.arrival,
     carrier: option.carrier,
+    fare: option.fare,
+    cabin: option.cabin,
     stops: option.stops,
     price: option.price !== undefined && option.price !== null && option.currency
       ? { amount: option.price, currency: option.currency }
@@ -312,7 +320,9 @@ function describeOffer(offer) {
   const what = offer.category === 'stay' && offer.label && offer.label !== offer.group ? ` ${offer.label}`
     : (offer.carrier ? ` ${offer.carrier}` : '');
   const price = offerCostText(offer) || (offer.price ? `${offer.price.currency} ${offer.price.low}` : 'no cash price');
-  return `- [${offer.id}] ${offer.kind}: ${where}${what}${when}, ${price}${offer.window ? ` {${offer.window}}` : ''}${offer.detail ? ` (${offer.detail})` : ''}`;
+  const fare = [offer.fare, offer.cabin && CABIN_LABEL[offer.cabin]].filter(Boolean).join(' · ');
+  const via = offer.source && offer.source !== 'claude' && offer.source !== 'unknown' ? ` via ${offer.source.replace(/^claude · /, '')}` : '';
+  return `- [${offer.id}] ${offer.kind}: ${where}${what}${when}, ${price}${fare ? ` [${fare}]` : ''}${offer.window ? ` {${offer.window}}` : ''}${via}${offer.detail ? ` (${offer.detail})` : ''}`;
 }
 
 async function addTripOptions(args, env, token) {
@@ -381,6 +391,8 @@ function rawFromOffer(o) {
     departure: o.departure,
     arrival: o.arrival,
     carrier: o.carrier,
+    fare: o.fare,
+    cabin: o.cabin,
     duration: o.duration,
     stops: o.stops,
     price: o.price ? { low: o.price.low, high: o.price.high, currency: o.price.currency } : undefined,
@@ -393,7 +405,7 @@ function rawFromOffer(o) {
   };
 }
 
-const CHANGE_TO_RAW = { from: 'from', to: 'to', place: 'place', name: 'label', departure: 'departure', arrival: 'arrival', carrier: 'carrier', stops: 'stops', per_night: 'perNight', nights: 'nights', note: 'detail', url: 'sourceUrl', window: 'window', kind: 'kind' };
+const CHANGE_TO_RAW = { from: 'from', to: 'to', place: 'place', name: 'label', departure: 'departure', arrival: 'arrival', carrier: 'carrier', fare: 'fare', cabin: 'cabin', stops: 'stops', per_night: 'perNight', nights: 'nights', note: 'detail', url: 'sourceUrl', window: 'window', kind: 'kind' };
 
 async function updateTripOption(args, env, token) {
   const changes = args.changes && typeof args.changes === 'object' ? args.changes : null;
@@ -413,6 +425,8 @@ async function updateTripOption(args, env, token) {
     if (CHANGE_TO_RAW[key]) raw[CHANGE_TO_RAW[key]] = changes[key];
   });
   if (changes.name !== undefined && current.category === 'activity') raw.place = changes.name;
+  // A new fare name means a new cabin, unless one was given outright.
+  if (changes.fare !== undefined && changes.cabin === undefined) raw.cabin = undefined;
   if (changes.price !== undefined || changes.currency !== undefined) {
     const currency = changes.currency || (current.price && current.price.currency);
     if (changes.price !== undefined && changes.price !== null && !currency) {
@@ -502,9 +516,10 @@ function getTripPath(trip) {
     if (!options.includes(chosen)) [chosen] = options;
     picks.push(chosen);
     n += 1;
-    const others = options.filter((o) => o !== chosen).map((o) => `${o.label} ${costLabel(o)}`);
+    const tags = (o) => { const t = [o.fare, o.cabin && CABIN_LABEL[o.cabin], o.source && `via ${o.source}`].filter(Boolean).join(' · '); return t ? ` [${t}]` : ''; };
+    const others = options.filter((o) => o !== chosen).map((o) => `${o.label} ${costLabel(o)}${tags(o)}`);
     const time = item.type === 'travel' && chosen.time && (chosen.time.from || chosen.time.to) ? ` ${chosen.time.from || '–'}–${chosen.time.to || '–'}` : '';
-    lines.push(`${n}. ${item.type === 'travel' ? 'Travel' : 'Stay'} ${group.key}: ${chosen.label}${time}, ${costLabel(chosen)}${others.length ? `\n   other options: ${others.join('; ')}` : ''}`);
+    lines.push(`${n}. ${item.type === 'travel' ? 'Travel' : 'Stay'} ${group.key}: ${chosen.label}${time}, ${costLabel(chosen)}${tags(chosen)}${others.length ? `\n   other options: ${others.join('; ')}` : ''}`);
   });
   const acts = parsed.activities.filter((x) => selection.activity && selection.activity[x.idx]);
   if (acts.length) lines.push(`Activities included: ${acts.map((x) => `${x.label} ${costLabel(x)}`).join('; ')}`);
@@ -516,9 +531,18 @@ function optimizeTrip(trip, args) {
   const a = analyze(trip);
   if (!a) return planEmpty(trip);
   const { parsed, rates, selection } = a;
+  // The same narrowing as the planner's Preferences: a leg where nothing fits
+  // keeps all its options, and what was left out is reported, never hidden.
+  const prefs = { cabins: args.cabin ? [args.cabin] : [], portals: args.portal ? [args.portal] : [], avoidBasic: !!args.avoid_basic };
+  let leftOut = 0;
+  const narrow = (g) => {
+    const fitting = g.options.filter((o) => matchesPreferences(o, prefs));
+    if (fitting.length && fitting.length < g.options.length) leftOut += g.options.length - fitting.length;
+    return fitting.length ? fitting : g.options;
+  };
   const groups = [
-    ...parsed.travel.map((g) => ({ kind: 'travel', key: g.key, options: g.options })),
-    ...parsed.stay.map((g) => ({ kind: 'stay', key: g.key, options: g.options })),
+    ...parsed.travel.map((g) => ({ kind: 'travel', key: g.key, options: narrow(g) })),
+    ...parsed.stay.map((g) => ({ kind: 'stay', key: g.key, options: narrow(g) })),
   ];
   if (groups.length < 2) return textResult('Ranking needs at least two travel legs or stays in the plan.');
   const result = enumerateCombinations(groups, rates, COMBO_CAP);
@@ -538,6 +562,7 @@ function optimizeTrip(trip, args) {
   ranked.slice(0, limit).forEach((c, i) => {
     lines.push(`${i + 1}. ${euro(c.low)}${c.high !== c.low ? `–${euro(c.high)}` : ''}${c.window ? ` {${c.window}}` : ''}: ${c.picks.map((p) => `${p.key}: ${p.option.label}`).join(' | ')}`);
   });
+  if (leftOut) lines.push(`${leftOut} option${leftOut === 1 ? '' : 's'} left out by the preferences given (${[args.cabin && `cabin ${CABIN_LABEL[args.cabin]}`, args.portal && `portal ${args.portal}`, args.avoid_basic && 'no basic fares'].filter(Boolean).join(', ')}).`);
   if (result.missingCurrencies && result.missingCurrencies.length) {
     lines.push(`Options priced in ${result.missingCurrencies.join(', ')} are left out — no exchange rate is set in the planner.`);
   }

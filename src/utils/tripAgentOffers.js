@@ -12,6 +12,7 @@
 // ESM with explicit .js import specifiers.
 
 import { newRowId, parseCost, costTextIssue, linesToRows, parseTimes, CURRENCY_SYMBOLS } from './parseTripNotes.js';
+import { cabinFromFare, CABINS } from './fareClass.js';
 
 export const OFFER_PROTOCOL = 'tripagent/v1';
 export const MSG_FROM_EXTENSION = 'tripagent-extension';
@@ -268,6 +269,10 @@ export function normalizeOffer(raw, defaults = {}) {
     nights,
     window: clean(raw.window || defaults.window),
     label: clean(raw.label || raw.title || place),
+    // The fare name as printed ("Main Basic", "Eco Fly") and the cabin it
+    // implies; the cabin can also be given outright. Travel only.
+    fare: category === 'travel' ? clean(raw.fare || raw.fareName || raw.brand).slice(0, 60) : '',
+    cabin: category === 'travel' ? (CABINS.includes(String(raw.cabin || '').toLowerCase()) ? String(raw.cabin).toLowerCase() : cabinFromFare(raw.fare || raw.fareName || raw.brand)) : '',
     detail: clean(raw.detail || raw.description),
     source: clean(raw.source || defaults.source) || 'unknown',
     sourceUrl: safeHttpUrl(raw.sourceUrl || raw.url || defaults.sourceUrl),
@@ -329,7 +334,6 @@ function offerDetail(offer) {
       : `${offer.price.low}-${offer.price.high}`;
     bits.push(`price ${offer.price.currency} ${amount} (enter manually)`);
   }
-  if (offer.source && offer.source !== 'unknown') bits.push(`via ${offer.source}`);
   return bits.join(' · ');
 }
 
@@ -351,6 +355,10 @@ export function offerToRow(offer, id) {
     detail: offerDetail(offer),
     window: offer.window || '',
     sourceUrl: offer.sourceUrl || '',
+    // Portal, fare and cabin are their own columns, so preferences can read them.
+    source: offer.source && offer.source !== 'unknown' ? offer.source : '',
+    fare: offer.fare || '',
+    cabin: offer.cabin || '',
   };
 }
 

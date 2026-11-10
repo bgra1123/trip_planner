@@ -17,6 +17,8 @@ struct AddOptionView: View {
     @State private var departure = ""
     @State private var arrival = ""
     @State private var carrier = ""
+    @State private var fare = ""
+    @State private var cabin = ""
     @State private var stops = -1
     @State private var place = ""
     @State private var name = ""
@@ -70,6 +72,10 @@ struct AddOptionView: View {
                         TextField("Departs, e.g. 18:30", text: $departure)
                         TextField("Arrives, e.g. 07:45", text: $arrival)
                         TextField(kind == "train" ? "Operator" : "Airline", text: $carrier)
+                        TextField("Fare as shown — Main Basic, Eco Fly…", text: $fare)
+                        Picker("Cabin", selection: $cabin) {
+                            Text("From the fare name").tag(""); Text("Economy").tag("economy"); Text("Premium economy").tag("premium_economy"); Text("Business").tag("business"); Text("First").tag("first")
+                        }
                         Picker("Stops", selection: $stops) {
                             Text("Not stated").tag(-1); Text("Nonstop").tag(0); Text("1 stop").tag(1); Text("2 stops").tag(2)
                         }
@@ -132,6 +138,7 @@ struct AddOptionView: View {
         func put(_ key: String, _ value: String) { let v = value.trimmingCharacters(in: .whitespaces); if !v.isEmpty { option[key] = v } }
         if isTravel {
             put("from", from); put("to", to); put("departure", departure); put("arrival", arrival); put("carrier", carrier)
+            put("fare", fare); put("cabin", cabin)
             if stops >= 0 { option["stops"] = stops }
         } else if kind == "hotel" {
             put("place", place); put("name", name)

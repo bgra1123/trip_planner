@@ -245,6 +245,7 @@ This project is licensed under the **MIT License** — see [LICENSE](LICENSE) fi
 - [x] Bank travel portal capture (Capital One, Amex)
 - [x] Currency conversion (`RATE:` lines, EUR base)
 - [ ] Weather forecast for travel dates
+- [ ] A built-in agent as a paid feature (MCP via the Claude app first) — see [docs/FUTURE-PLANS.md](docs/FUTURE-PLANS.md)
 
 ## 📧 Support
 
